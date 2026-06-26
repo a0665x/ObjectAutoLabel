@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.venv/
+venv/
+env/
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
+frontend/tsconfig.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local runtime data
+object_autolabel.db
+*.db
+*.sqlite
+*.sqlite3
+data/
+runs/
+
+# Model assets are large and should be managed outside git
+models/
+yolo_model/
+world_model/
+input_model/
+output_model/
+*.pt
+*.pth
+*.onnx
+*.tflite
+*.torchscript
+*.engine
+
+# Local secrets and environment
+.env
+.env.*
+api_key.txt
+*.pem
+*.key
+
+# Codex / agent / local workflow state
+.codex/
+.agents/
+.superpowers/
+.gstack/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Docker local overrides
+docker-compose.override.yml
+.run-mode

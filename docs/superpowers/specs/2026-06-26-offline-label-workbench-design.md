@@ -20,22 +20,21 @@ The project already has a FastAPI backend, SQLite persistence, a React/Vite fron
 
 The current `ReviewPage` can display bounding boxes and save edited annotation lists, but it is not yet a real annotation editor. It does not support drawing boxes, dragging boxes, resizing boxes, fast quality filtering, or a LabelImg-like correction flow.
 
-The model-folder concept is also inconsistent. Backend `AppPaths` expects `world_model/`, `input_model/`, and `output_model/`, while current compose files still mount legacy `models/` and `yolo_model/`.
+The model-folder concept is now explicit: `world_model/`, `input_model/`, and `output_model/` are the only runtime model roots.
 
 ## Model Asset Rules
 
 The project should use three explicit model folders:
 
 - `world_model/`: YOLO-World prompt/open-vocabulary models used only for pseudo-labeling.
-- `input_model/`: user-selected Ultralytics YOLO starting models used for retraining or fine-tuning.
-- `output_model/`: trained model outputs and exports, including `best.pt`, `last.pt`, ONNX, TFLite, and TorchScript artifacts.
+- `input_model/`: user-selected Ultralytics YOLO starting models used for retraining or fine-tuning, including `.pt` and `.pth` weights.
+- `output_model/`: trained model outputs and exports, including `best.pt`, `best.pth`, `last.pt`, ONNX, TFLite, and TorchScript artifacts.
 
 Migration rules:
 
-- Move YOLO-World files such as `yolov8s-world.pt`, `yolov8m-world.pt`, `yolov8l-world.pt`, and `yolov8x-world.pt` from legacy folders into `world_model/`.
+- Put YOLO-World files such as `yolov8s-world.pt`, `yolov8m-world.pt`, `yolov8l-world.pt`, and `yolov8x-world.pt` in `world_model/`.
 - Move base YOLO files such as `yolov8n.pt`, `yolo11n.pt`, `yolov5nu.pt`, and similar starting checkpoints into `input_model/`.
-- Move trained `best*.pt`, `last*.pt`, exported `.onnx`, `.tflite`, and `.torchscript` artifacts into `output_model/` when they are known outputs.
-- Do not delete legacy folders automatically. The first implementation should copy or move with explicit rules and leave a migration note.
+- Put trained `best*.pt`, `best*.pth`, `last*.pt`, exported `.onnx`, `.tflite`, and `.torchscript` artifacts into `output_model/` when they are known outputs.
 - Docker compose files must mount the three active folders so model discovery works inside the container.
 
 ## First-Phase Scope

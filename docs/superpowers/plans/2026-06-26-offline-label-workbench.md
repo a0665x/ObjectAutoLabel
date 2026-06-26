@@ -95,8 +95,6 @@ data/
 runs/
 
 # Model assets are large and should be managed outside git
-models/
-yolo_model/
 world_model/
 input_model/
 output_model/
@@ -194,14 +192,7 @@ Expected: only intended documentation and `.gitignore` are staged; commit succee
 
 - [ ] **Step 1: Update compose mounts**
 
-Replace legacy mounts:
-
-```yaml
-- ./models:/app/models:ro
-- ./yolo_model:/app/yolo_model:ro
-```
-
-with:
+Use the explicit runtime model mounts:
 
 ```yaml
 - ./world_model:/app/world_model:ro

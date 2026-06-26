@@ -47,12 +47,14 @@ def test_list_models_uses_world_and_input_dirs(tmp_path: Path) -> None:
     (tmp_path / "world_model").mkdir()
     (tmp_path / "input_model").mkdir()
     (tmp_path / "world_model" / "yolov8s-world.pt").write_text("x", encoding="utf-8")
+    (tmp_path / "world_model" / "custom-world.pth").write_text("x", encoding="utf-8")
     (tmp_path / "input_model" / "yolov8n.pt").write_text("x", encoding="utf-8")
+    (tmp_path / "input_model" / "custom-input.pth").write_text("x", encoding="utf-8")
 
     models = repo.list_models()
 
     assert models == {
-        "world_models": ["yolov8s-world.pt"],
-        "input_models": ["yolov8n.pt"],
+        "world_models": ["custom-world.pth", "yolov8s-world.pt"],
+        "input_models": ["custom-input.pth", "yolov8n.pt"],
         "output_models": [],
     }

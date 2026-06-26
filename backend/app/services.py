@@ -1,7 +1,9 @@
 """Legacy compatibility helpers from the pre-workbench workflow.
 
-This module remains as reference/support for older paths. The active offline
-labeling runtime uses `project_services.py`, `world_models.py`, and `main.py`.
+This module remains as reference/support for older workflows. The active
+offline labeling runtime uses `project_services.py`, `world_models.py`, and
+`main.py`, and model assets live in `world_model/`, `input_model/`, and
+`output_model/`.
 """
 
 from __future__ import annotations
@@ -16,10 +18,12 @@ from typing import Any
 import cv2
 import yaml
 
+from .config import AppPaths
 
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-MODEL_DIRS = [PROJECT_ROOT / "models", PROJECT_ROOT / "yolo_model"]
+PATHS = AppPaths()
+PROJECT_ROOT = PATHS.project_root
+MODEL_DIRS = [PATHS.world_model_dir, PATHS.input_model_dir, PATHS.output_model_dir]
 
 
 def resolve_model_path(model: str) -> str:
@@ -34,9 +38,22 @@ def resolve_model_path(model: str) -> str:
 
 
 def list_models() -> dict[str, list[str]]:
-    world_models = sorted(path.name for path in (PROJECT_ROOT / "models").glob("*.pt"))
-    train_models = sorted(path.name for path in (PROJECT_ROOT / "yolo_model").glob("*.pt"))
-    return {"world_models": world_models, "training_models": train_models}
+    weight_suffixes = {".pt", ".pth"}
+
+    def weight_files(path: Path) -> list[str]:
+        if not path.exists():
+            return []
+        return sorted(item.name for item in path.iterdir() if item.is_file() and item.suffix in weight_suffixes)
+
+    world_models = weight_files(PATHS.world_model_dir)
+    input_models = weight_files(PATHS.input_model_dir)
+    output_models = weight_files(PATHS.output_model_dir)
+    return {
+        "world_models": world_models,
+        "input_models": input_models,
+        "output_models": output_models,
+        "training_models": input_models,
+    }
 
 
 def split_video_into_frames(

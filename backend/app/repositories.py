@@ -126,10 +126,14 @@ class Repository:
         return [schema for row in rows if (schema := self.get_class_schema(row["id"])) is not None]
 
     def list_models(self) -> dict[str, list[str]]:
-        def pt_files(path: Path) -> list[str]:
-            return sorted(item.name for item in path.glob("*.pt")) if path.exists() else []
+        weight_suffixes = {".pt", ".pth"}
 
-        output_suffix_order = {".pt": 0, ".onnx": 1, ".torchscript": 2, ".tflite": 3}
+        def weight_files(path: Path) -> list[str]:
+            if not path.exists():
+                return []
+            return sorted(item.name for item in path.iterdir() if item.is_file() and item.suffix in weight_suffixes)
+
+        output_suffix_order = {".pt": 0, ".pth": 1, ".onnx": 2, ".torchscript": 3, ".tflite": 4}
 
         def output_model_sort_key(path: Path) -> tuple[str, int, str]:
             relative = path.relative_to(self.paths.output_model_dir)
@@ -141,14 +145,14 @@ class Repository:
             output_models = [
                 str(item.relative_to(self.paths.output_model_dir))
                 for item in self.paths.output_model_dir.rglob("*")
-                if item.suffix in {".pt", ".tflite", ".onnx", ".torchscript"}
+                if item.suffix in {".pt", ".pth", ".tflite", ".onnx", ".torchscript"}
             ]
             output_models.sort(
                 key=lambda relative_path: output_model_sort_key(self.paths.output_model_dir / relative_path)
             )
         return {
-            "world_models": pt_files(self.paths.world_model_dir),
-            "input_models": pt_files(self.paths.input_model_dir),
+            "world_models": weight_files(self.paths.world_model_dir),
+            "input_models": weight_files(self.paths.input_model_dir),
             "output_models": output_models,
         }
 

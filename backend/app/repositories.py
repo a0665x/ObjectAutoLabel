@@ -129,12 +129,22 @@ class Repository:
         def pt_files(path: Path) -> list[str]:
             return sorted(item.name for item in path.glob("*.pt")) if path.exists() else []
 
+        output_suffix_order = {".pt": 0, ".onnx": 1, ".torchscript": 2, ".tflite": 3}
+
+        def output_model_sort_key(path: Path) -> tuple[str, int, str]:
+            relative = path.relative_to(self.paths.output_model_dir)
+            stem_path = str(relative.with_suffix(""))
+            return (stem_path, output_suffix_order.get(path.suffix, len(output_suffix_order)), str(relative))
+
         output_models: list[str] = []
         if self.paths.output_model_dir.exists():
-            output_models = sorted(
+            output_models = [
                 str(item.relative_to(self.paths.output_model_dir))
                 for item in self.paths.output_model_dir.rglob("*")
                 if item.suffix in {".pt", ".tflite", ".onnx", ".torchscript"}
+            ]
+            output_models.sort(
+                key=lambda relative_path: output_model_sort_key(self.paths.output_model_dir / relative_path)
             )
         return {
             "world_models": pt_files(self.paths.world_model_dir),

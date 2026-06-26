@@ -38,4 +38,4 @@ def test_model_endpoints_include_nested_output_model_paths(tmp_path: Path) -> No
 
     assert models["world_models"] == ["yolov8s-world.pt"]
     assert models["input_models"] == ["yolov8n.pt"]
-    assert models["output_models"] == ["project-a/best.onnx", "project-a/best.pt"]
+    assert models["output_models"] == ["project-a/best.pt", "project-a/best.onnx"]

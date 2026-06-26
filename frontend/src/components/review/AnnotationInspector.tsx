@@ -17,6 +17,7 @@ type AnnotationInspectorProps = {
   onClassChange: (annotationId: string, classId: number) => void;
   onReviewStatusChange: (status: ReviewStatus) => void;
   onSave: () => void;
+  onSaveAndNext: () => void;
 };
 
 const REVIEW_STATUS_OPTIONS: Array<{ value: ReviewStatus; label: string }> = [
@@ -45,8 +46,11 @@ export function AnnotationInspector({
   onDelete,
   onClassChange,
   onReviewStatusChange,
-  onSave
+  onSave,
+  onSaveAndNext
 }: AnnotationInspectorProps) {
+  const selectedAnnotation = annotations.find((item) => item.id === selectedId) ?? null;
+
   return (
     <aside className="panel review-sidebar-section">
       <div className="sidebar-header">
@@ -71,12 +75,35 @@ export function AnnotationInspector({
         <button type="button" className="primary" onClick={onSave} disabled={!image || saving}>
           {saving ? "Saving..." : "Save annotations"}
         </button>
+        <button type="button" className="secondary" onClick={onSaveAndNext} disabled={!image || saving}>
+          Save & next (Shift+S)
+        </button>
       </div>
 
       <div className="inspector-meta">
         <span>{annotations.length} annotations</span>
         <span>{loading ? "Loading..." : "Ready"}</span>
       </div>
+
+      {selectedAnnotation && (
+        <div className="sidebar-field">
+          <strong>Selected annotation</strong>
+          <div className="inspector-details">
+            <span>Confidence</span>
+            <strong>
+              {selectedAnnotation.confidence === null || selectedAnnotation.confidence === undefined
+                ? "N/A"
+                : `${(selectedAnnotation.confidence * 100).toFixed(1)}%`}
+            </strong>
+            <span>Source descriptor</span>
+            <strong>{selectedAnnotation.source_descriptor || "N/A"}</strong>
+            <span>Source type</span>
+            <strong>{selectedAnnotation.source_type}</strong>
+            <span>Edited</span>
+            <strong>{selectedAnnotation.edited ? "Yes" : "No"}</strong>
+          </div>
+        </div>
+      )}
 
       <div className="annotation-list">
         {annotations.length === 0 && <p className="muted">No annotations on this image yet.</p>}

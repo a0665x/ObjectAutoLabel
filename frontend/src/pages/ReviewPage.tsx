@@ -13,6 +13,7 @@ import {
   hasDirtyReviewState,
   shouldProceedWithReviewNavigation
 } from "./reviewState";
+import { DEFAULT_REVIEW_FILTERS, getNextImageId } from "./reviewConfig";
 import type { Annotation, ClassItem, Project, ProjectImage, SourceAsset } from "../types";
 
 type ReviewPageProps = {
@@ -48,7 +49,7 @@ export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
   const [sources, setSources] = useState<SourceAsset[]>([]);
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [stats, setStats] = useState<ReviewStats>(EMPTY_STATS);
-  const [filters, setFilters] = useState<ImageFilters>({ review_status: "unreviewed" });
+  const [filters, setFilters] = useState<ImageFilters>(DEFAULT_REVIEW_FILTERS);
   const [images, setImages] = useState<ProjectImage[]>([]);
   const [activeImageId, setActiveImageId] = useState<string | null>(null);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
@@ -251,12 +252,13 @@ export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
     [applyAnnotationAction]
   );
 
-  const persistAnnotations = useCallback(async () => {
+  const persistAnnotations = useCallback(async (advanceToNext = false) => {
     if (!image) return;
     setSaving(true);
     setError(null);
     try {
       const nextReviewStatus = normalizeReviewStatus(reviewStatus);
+      const nextImageId = advanceToNext ? getNextImageId(images, image.id) : image.id;
       const result = await api.saveAnnotations(image.id, { annotations, review_status: reviewStatus });
       setAnnotations(result.annotations);
       setReviewStatus(nextReviewStatus);
@@ -266,6 +268,9 @@ export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
       );
       const nextImages = await api.images(project.id, filters);
       setImages(nextImages);
+      setActiveImageId(
+        nextImageId && nextImages.some((candidate) => candidate.id === nextImageId) ? nextImageId : nextImages[0]?.id ?? null
+      );
       await refreshStats();
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : "Failed to save annotations.");
@@ -326,6 +331,11 @@ export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
         setMode("select");
         return;
       }
+      if ((event.key === "s" || event.key === "S") && event.shiftKey) {
+        event.preventDefault();
+        persistAnnotations(true).catch(console.error);
+        return;
+      }
       if (event.key === "s" || event.key === "S") {
         event.preventDefault();
         persistAnnotations().catch(console.error);
@@ -359,6 +369,9 @@ export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
           onNext={goNext}
           onSave={() => {
             persistAnnotations().catch(console.error);
+          }}
+          onSaveAndNext={() => {
+            persistAnnotations(true).catch(console.error);
           }}
         />
 
@@ -438,6 +451,9 @@ export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
           onReviewStatusChange={setReviewStatus}
           onSave={() => {
             persistAnnotations().catch(console.error);
+          }}
+          onSaveAndNext={() => {
+            persistAnnotations(true).catch(console.error);
           }}
         />
       </div>

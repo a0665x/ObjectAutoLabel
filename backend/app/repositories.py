@@ -257,6 +257,9 @@ class Repository:
     def get_image(self, image_id: str) -> dict[str, Any] | None:
         return row_to_dict(self.db.execute("select * from images where id = ?", (image_id,)).fetchone())
 
+    def get_image_by_path(self, path: str) -> dict[str, Any] | None:
+        return row_to_dict(self.db.execute("select * from images where path = ?", (path,)).fetchone())
+
     def list_images(
         self,
         project_id: str,

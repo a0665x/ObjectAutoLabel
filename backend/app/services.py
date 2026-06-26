@@ -1,3 +1,9 @@
+"""Legacy compatibility helpers from the pre-workbench workflow.
+
+This module remains as reference/support for older paths. The active offline
+labeling runtime uses `project_services.py`, `world_models.py`, and `main.py`.
+"""
+
 from __future__ import annotations
 
 import glob

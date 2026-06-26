@@ -1,3 +1,13 @@
+FROM node:22-bookworm-slim AS frontend-builder
+
+WORKDIR /frontend
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+COPY frontend/ ./
+RUN npm run build
+
 FROM pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -17,11 +27,9 @@ RUN pip install --upgrade pip \
     && pip install git+https://github.com/ultralytics/CLIP.git@main
 
 COPY backend /app/backend
-COPY frontend /app/frontend
-COPY models /app/models
-COPY yolo_model /app/yolo_model
+COPY --from=frontend-builder /frontend/dist /app/frontend/dist
 
-RUN mkdir -p /app/data/input /app/data/output /app/data/datasets /app/runs
+RUN mkdir -p /app/data/projects /app/runs /app/world_model /app/input_model /app/output_model
 
 EXPOSE 8501
 EXPOSE 8081

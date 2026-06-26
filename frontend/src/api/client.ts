@@ -32,7 +32,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-function buildImageQuery(filters: ImageFilters): string {
+export function buildImageQuery(filters: ImageFilters): string {
   const params = new URLSearchParams();
 
   if (filters.review_status) params.set("review_status", filters.review_status);

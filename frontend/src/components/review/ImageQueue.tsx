@@ -1,4 +1,5 @@
 import type { ImageFilters, ReviewStats, ReviewStatus } from "../../api/client";
+import { REVIEW_QUEUE_TILES } from "../../pages/reviewConfig";
 import type { ProjectImage, SourceAsset } from "../../types";
 
 type ImageQueueProps = {
@@ -49,22 +50,12 @@ export function ImageQueue({
       </div>
 
       <div className="review-stats-grid">
-        <div className="stat-tile">
-          <span>Unreviewed</span>
-          <strong>{stats.unreviewed}</strong>
-        </div>
-        <div className="stat-tile">
-          <span>Needs fix</span>
-          <strong>{stats.needs_fix}</strong>
-        </div>
-        <div className="stat-tile">
-          <span>Reviewed</span>
-          <strong>{stats.reviewed}</strong>
-        </div>
-        <div className="stat-tile">
-          <span>Low confidence</span>
-          <strong>{stats.low_confidence}</strong>
-        </div>
+        {REVIEW_QUEUE_TILES.map((tile) => (
+          <div key={tile.key} className="stat-tile">
+            <span>{tile.label}</span>
+            <strong>{stats[tile.key]}</strong>
+          </div>
+        ))}
       </div>
 
       <div className="queue-filters">

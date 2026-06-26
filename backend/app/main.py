@@ -29,6 +29,53 @@ from .schemas import (
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 STATIC_DIR = FRONTEND_DIR / "dist"
+ALLOWED_CORS_ORIGINS = [
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8501",
+    "http://127.0.0.1:8501",
+]
+SAFE_PROJECT_FILE_DIRS = {"frames", "metadata", "pseudo_labels", "reviewed_labels", "sources", "splits"}
+
+
+def resolve_frontend_dist(frontend_dir: Path = FRONTEND_DIR) -> Path:
+    dist_dir = frontend_dir / "dist"
+    index_file = dist_dir / "index.html"
+    if not index_file.is_file():
+        raise RuntimeError(
+            f"Missing built frontend assets at {index_file}. Run `npm --prefix frontend run build` "
+            "or use the supported Docker startup path."
+        )
+    return dist_dir
+
+
+def is_safe_project_file(file_path: Path) -> bool:
+    for project in repo.list_projects():
+        project_root = Path(project["root_path"]).resolve()
+        try:
+            relative = file_path.relative_to(project_root)
+        except ValueError:
+            continue
+        if not relative.parts:
+            return False
+        return relative.parts[0] in SAFE_PROJECT_FILE_DIRS
+    return False
+
+
+def resolve_served_file(path: str) -> Path:
+    file_path = Path(path).expanduser()
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    resolved_path = file_path.resolve()
+    image = repo.get_image_by_path(str(file_path)) or repo.get_image_by_path(str(resolved_path))
+    if image:
+        return resolved_path
+    if is_safe_project_file(resolved_path):
+        return resolved_path
+    raise HTTPException(status_code=404, detail="File not found")
 
 paths = AppPaths(project_root=PROJECT_ROOT)
 ensure_runtime_dirs(paths)
@@ -40,7 +87,7 @@ jobs = JobRunner(repo=repo, max_workers=2)
 app = FastAPI(title="ObjectAutoLabel API", version="0.2.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -54,9 +101,7 @@ def health() -> dict[str, Any]:
 
 @app.get("/api/files")
 def read_local_file(path: str) -> FileResponse:
-    file_path = Path(path)
-    if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
+    file_path = resolve_served_file(path)
     return FileResponse(file_path)
 
 
@@ -323,7 +368,14 @@ def create_model_export(project_id: str, payload: ModelExportCreate) -> dict[str
     )
 
 
-if STATIC_DIR.exists():
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="frontend")
-else:
-    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+try:
+    app.mount("/", StaticFiles(directory=resolve_frontend_dist(), html=True), name="frontend")
+except RuntimeError as frontend_error:
+    frontend_error_message = str(frontend_error)
+
+    @app.get("/", include_in_schema=False)
+    @app.get("/{frontend_path:path}", include_in_schema=False)
+    def frontend_not_built(frontend_path: str = "") -> dict[str, str]:
+        if frontend_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
+        raise HTTPException(status_code=503, detail=frontend_error_message)

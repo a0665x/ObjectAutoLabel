@@ -267,6 +267,7 @@ progress { width: 70px; accent-color: var(--blue); }
 
 .toolbar-save {
   justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .icon-button,
@@ -284,6 +285,18 @@ progress { width: 70px; accent-color: var(--blue); }
   height: 42px;
   place-items: center;
   border-radius: 10px;
+}
+
+.secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  background: #fff;
 }
 
 .segmented-control {
@@ -491,6 +504,17 @@ progress { width: 70px; accent-color: var(--blue); }
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.inspector-details {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+}
+
+.inspector-details strong {
+  color: var(--text);
+  text-align: right;
 }
 
 .class-grid {

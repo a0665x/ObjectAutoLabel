@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Hand, LocateFixed, Save, SquarePen } from "lucide-react";
+import { ChevronLeft, ChevronRight, Hand, LocateFixed, Save, SkipForward, SquarePen } from "lucide-react";
 
 import type { ReviewStatus } from "../../api/client";
 
@@ -14,6 +14,7 @@ type AnnotationToolbarProps = {
   onPrevious: () => void;
   onNext: () => void;
   onSave: () => void;
+  onSaveAndNext: () => void;
 };
 
 const REVIEW_STATUS_OPTIONS: Array<{ value: ReviewStatus; label: string }> = [
@@ -35,7 +36,8 @@ export function AnnotationToolbar({
   onReviewStatusChange,
   onPrevious,
   onNext,
-  onSave
+  onSave,
+  onSaveAndNext
 }: AnnotationToolbarProps) {
   return (
     <section className="review-toolbar panel">
@@ -93,6 +95,16 @@ export function AnnotationToolbar({
         <button type="button" className="primary" onClick={onSave} disabled={saving}>
           <Save size={16} />
           <span>{saving ? "Saving..." : "Save"}</span>
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          onClick={onSaveAndNext}
+          disabled={saving}
+          title="Save and move to the next image (Shift+S)"
+        >
+          <SkipForward size={16} />
+          <span>Save & next</span>
         </button>
       </div>
     </section>

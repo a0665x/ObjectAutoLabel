@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { rectToYolo, yoloToRect } from "./geometry";
+import { clampRect, rectToYolo, yoloToRect } from "./geometry";
 
 describe("geometry", () => {
   it("converts a yolo box to a pixel rect", () => {
@@ -18,6 +18,15 @@ describe("geometry", () => {
       y_center: 0.5,
       width: 0.2,
       height: 0.4
+    });
+  });
+
+  it("normalizes inverted rectangles before clamping", () => {
+    expect(clampRect({ x: 80, y: 70, width: -30, height: -20 }, { width: 1000, height: 500 })).toEqual({
+      x: 50,
+      y: 50,
+      width: 30,
+      height: 20
     });
   });
 });

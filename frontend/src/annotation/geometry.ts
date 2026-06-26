@@ -7,6 +7,20 @@ function round6(value: number): number {
   return Math.round(value * 1_000_000) / 1_000_000;
 }
 
+function normalizeRect(rect: Rect): Rect {
+  const left = Math.min(rect.x, rect.x + rect.width);
+  const right = Math.max(rect.x, rect.x + rect.width);
+  const top = Math.min(rect.y, rect.y + rect.height);
+  const bottom = Math.max(rect.y, rect.y + rect.height);
+
+  return {
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top
+  };
+}
+
 export function yoloToRect(
   box: Pick<Annotation, "x_center" | "y_center" | "width" | "height">,
   image: Size
@@ -32,10 +46,11 @@ export function rectToYolo(rect: Rect, image: Size): Pick<Annotation, "x_center"
 }
 
 export function clampRect(rect: Rect, image: Size): Rect {
-  const left = Math.min(Math.max(rect.x, 0), image.width);
-  const top = Math.min(Math.max(rect.y, 0), image.height);
-  const right = Math.min(Math.max(rect.x + rect.width, 0), image.width);
-  const bottom = Math.min(Math.max(rect.y + rect.height, 0), image.height);
+  const normalized = normalizeRect(rect);
+  const left = Math.min(Math.max(normalized.x, 0), image.width);
+  const top = Math.min(Math.max(normalized.y, 0), image.height);
+  const right = Math.min(Math.max(normalized.x + normalized.width, 0), image.width);
+  const bottom = Math.min(Math.max(normalized.y + normalized.height, 0), image.height);
 
   return {
     x: round6(left),

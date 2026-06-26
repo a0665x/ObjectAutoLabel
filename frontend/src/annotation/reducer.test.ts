@@ -91,4 +91,26 @@ describe("annotationReducer", () => {
       }
     ]);
   });
+
+  it("resizes with an inverted rectangle and keeps positive yolo dimensions", () => {
+    const state = [makeAnnotation()];
+
+    expect(
+      annotationReducer(state, {
+        type: "resize",
+        id: "annotation-1",
+        rect: { x: 80, y: 70, width: -30, height: -20 },
+        image: { width: 1000, height: 500 }
+      })
+    ).toEqual([
+      {
+        ...state[0],
+        x_center: 0.065,
+        y_center: 0.12,
+        width: 0.03,
+        height: 0.04,
+        edited: true
+      }
+    ]);
+  });
 });

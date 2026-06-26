@@ -20,7 +20,7 @@
 5. Run YOLO-World pseudo-labeling.
 6. Review and save annotations in the offline workbench; the queue can be filtered by status, source, and low-confidence images.
 7. Create a dataset split.
-8. Train a YOLO model and collect outputs from `runs/detect` and `output_model`.
+8. Train a YOLO model and collect outputs from `output_model/<project_id>/`.
 9. Export the trained model if deployment needs ONNX, TFLite, or TorchScript.
 
 ## Runtime Folders

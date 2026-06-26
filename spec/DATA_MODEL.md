@@ -44,4 +44,4 @@ All coordinates are normalized to the source image width and height.
 - `world_model`: YOLO-World models.
 - `input_model`: standard YOLO input models.
 - `output_model`: trained/exported `.pt`, `.tflite`, `.onnx`, and `.torchscript` models.
-- `runs/detect`: training outputs.
+- `output_model/<project_id>`: training outputs and exported artifacts.

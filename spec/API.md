@@ -27,7 +27,7 @@ Most long-running endpoints return a job record. Poll `GET /api/jobs` for recent
 - `POST /api/projects/{project_id}/class-schemas`: create a class schema.
 - `GET /api/models/world`: lists `world_model/*.pt`.
 - `GET /api/models/input`: lists `input_model/*.pt`.
-- `GET /api/models/output`: lists exported files from `output_model/`.
+- `GET /api/models/output`: lists trained and exported artifacts from `output_model/`.
 - `GET /api/jobs`: recent jobs.
 - `GET /api/jobs/{job_id}`: one job.
 - `GET /api/projects/{project_id}/sources`: list source assets.

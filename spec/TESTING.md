@@ -8,20 +8,21 @@ This project currently has smoke-test level validation:
 - Shell syntax check for `run.sh`.
 - Docker Compose config validation when Docker is available.
 - Backend pytest coverage for repositories, jobs, DB schema, annotations API, model listing, project services, label IO, and YOLO-World helpers.
-- Frontend TypeScript/Vite build and Vitest support through `frontend/package.json`.
+- Frontend TypeScript/Vite build and Vitest coverage for review-state, annotation reducer, geometry helpers, and canvas affordance behavior.
 
-## Suggested Commands
+## Task 6 Verification Commands
 
 ```bash
-python3 -m py_compile backend/app/*.py
-pytest
+pytest -v
+npm --prefix frontend test
+npm --prefix frontend run build
 bash -n run.sh
 docker compose -f docker-compose.yml config
-npm --prefix frontend run build
-npm --prefix frontend test
+docker compose -f docker-compose.jetson.yml config
 ```
 
 ## Gaps
 
 - No automated integration test covers YOLO-World inference yet.
-- Frontend test coverage is still light.
+- No browser-level end-to-end automation covers the review workbench interactions.
+- Frontend coverage remains focused on review utilities rather than full-screen interaction flows.

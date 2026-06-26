@@ -18,10 +18,17 @@
 3. Extract frames when the source is a video.
 4. Create a class schema with YOLO class ids, names, and descriptors.
 5. Run YOLO-World pseudo-labeling.
-6. Review and save annotations.
+6. Review and save annotations in the offline workbench; the queue can be filtered by status, source, and low-confidence images.
 7. Create a dataset split.
 8. Train a YOLO model and collect outputs from `runs/detect` and `output_model`.
 9. Export the trained model if deployment needs ONNX, TFLite, or TorchScript.
+
+## Runtime Folders
+
+- `world_model/`: YOLO-World `.pt` files offered on the pseudo-label screen and through `GET /api/models/world`.
+- `input_model/`: training input `.pt` files offered on the train screen and through `GET /api/models/input`.
+- `output_model/`: exported and trained artifacts surfaced on the settings/export screens and through `GET /api/models/output`.
+- `data/projects/<slug>/reviewed_labels/`: YOLO label files written by annotation saves.
 
 ## Failure Modes
 
@@ -31,4 +38,5 @@
 - `gpus: all` fails: NVIDIA Container Toolkit is missing or Docker cannot access GPU.
 - Model not found: ensure the `.pt` file exists in `world_model/`, `input_model/`, or `output_model/`, depending on the screen.
 - Video path not found: the browser path must be a container-visible path such as `/app/data/input/file.mp4`.
+- Annotation save rejected: bbox coordinates must remain normalized and inside image bounds; invalid rectangles return HTTP 422 and do not update the label file.
 - TFLite export errors: TensorFlow/ONNX conversion dependencies are sensitive to model type and installed versions.

@@ -26,6 +26,7 @@ ObjectAutoLabel is a Dockerized WebUI for object-detection dataset preparation a
 - `Class schema`: per-project class ids, class names, and YOLO-World descriptors.
 - `YOLO-World model`: `.pt` models in `world_model/` used for open-vocabulary pseudo-labeling.
 - `YOLO training model`: `.pt` models in `input_model/` used by Ultralytics training; exported outputs are listed from `output_model/`.
+- `Offline review workbench`: the review screen is a local-first SVG annotation console with queue filters, review-status tracking, and YOLO label persistence under each project.
 - `Dataset lifecycle`: project -> source assets -> frame extraction or image registration -> class schema -> pseudo-labels -> review annotations -> dataset split -> YOLO training -> export.
 
 ## Change Guide
@@ -40,3 +41,4 @@ ObjectAutoLabel is a Dockerized WebUI for object-detection dataset preparation a
 - The current WebUI uses local paths typed by the user; a browser-side file manager is not implemented yet.
 - Training progress is coarse because Ultralytics training is invoked synchronously inside a job.
 - The older Roboflow upload/download flow is not exposed by the current project-centric API.
+- The workbench is intentionally offline and trusted-user oriented; `/api/files` still serves arbitrary readable local files by path.

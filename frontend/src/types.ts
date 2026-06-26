@@ -53,7 +53,7 @@ export type ProjectImage = {
 };
 
 export type Annotation = {
-  id?: string | null;
+  id: string;
   class_id: number;
   class_name: string;
   x_center: number;

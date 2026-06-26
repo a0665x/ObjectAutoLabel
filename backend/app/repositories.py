@@ -257,18 +257,102 @@ class Repository:
     def get_image(self, image_id: str) -> dict[str, Any] | None:
         return row_to_dict(self.db.execute("select * from images where id = ?", (image_id,)).fetchone())
 
-    def list_images(self, project_id: str, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+    def list_images(
+        self,
+        project_id: str,
+        review_status: str | None = None,
+        has_low_confidence: bool | None = None,
+        source_asset_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        low_confidence_threshold: float = 0.5,
+    ) -> list[dict[str, Any]]:
+        filters = ["project_id = ?"]
+        params: list[Any] = [project_id]
+
+        if review_status is not None:
+            filters.append("review_status = ?")
+            params.append(review_status)
+        if source_asset_id is not None:
+            filters.append("source_asset_id = ?")
+            params.append(source_asset_id)
+        if has_low_confidence is not None:
+            clause = """
+                exists (
+                    select 1
+                    from annotations
+                    where annotations.image_id = images.id
+                      and annotations.confidence is not null
+                      and annotations.confidence < ?
+                )
+            """
+            filters.append(clause if has_low_confidence else f"not {clause}")
+            params.append(low_confidence_threshold)
+
+        params.extend([limit, offset])
+        where_clause = " and ".join(filters)
         return rows_to_dicts(
             self.db.execute(
-                """
+                f"""
                 select * from images
-                where project_id = ?
+                where {where_clause}
                 order by path asc
                 limit ? offset ?
                 """,
-                (project_id, limit, offset),
+                params,
             ).fetchall()
         )
+
+    def get_review_stats(
+        self, project_id: str, low_confidence_threshold: float = 0.5
+    ) -> dict[str, int]:
+        stats = {
+            "unreviewed": 0,
+            "pending_review": 0,
+            "needs_fix": 0,
+            "reviewed": 0,
+            "skipped": 0,
+            "edited": 0,
+            "low_confidence": 0,
+        }
+        status_rows = self.db.execute(
+            """
+            select review_status, count(*) as count
+            from images
+            where project_id = ?
+            group by review_status
+            """,
+            (project_id,),
+        ).fetchall()
+        for row in status_rows:
+            review_status = row["review_status"]
+            if review_status in stats:
+                stats[review_status] = int(row["count"])
+
+        edited_row = self.db.execute(
+            """
+            select count(distinct images.id) as count
+            from images
+            join annotations on annotations.image_id = images.id
+            where images.project_id = ?
+              and annotations.edited = 1
+            """,
+            (project_id,),
+        ).fetchone()
+        low_confidence_row = self.db.execute(
+            """
+            select count(distinct images.id) as count
+            from images
+            join annotations on annotations.image_id = images.id
+            where images.project_id = ?
+              and annotations.confidence is not null
+              and annotations.confidence < ?
+            """,
+            (project_id, low_confidence_threshold),
+        ).fetchone()
+        stats["edited"] = int(edited_row["count"]) if edited_row is not None else 0
+        stats["low_confidence"] = int(low_confidence_row["count"]) if low_confidence_row is not None else 0
+        return stats
 
     def replace_image_annotations(
         self,

@@ -15,6 +15,20 @@ from .repositories import Repository
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 
+def _validate_annotation_bounds(annotations: list[dict[str, Any]]) -> None:
+    for item in annotations:
+        width = float(item["width"])
+        height = float(item["height"])
+        x_center = float(item["x_center"])
+        y_center = float(item["y_center"])
+        if width <= 0 or height <= 0:
+            raise ValueError("Annotation bbox width and height must be greater than 0")
+        if x_center - (width / 2) < 0 or x_center + (width / 2) > 1:
+            raise ValueError("Annotation bbox must stay within normalized image bounds")
+        if y_center - (height / 2) < 0 or y_center + (height / 2) > 1:
+            raise ValueError("Annotation bbox must stay within normalized image bounds")
+
+
 def register_image_folder(repo: Repository, project_id: str, source_asset_id: str, folder: str) -> dict[str, Any]:
     folder_path = Path(folder)
     if not folder_path.exists():
@@ -105,6 +119,7 @@ def save_image_annotations(
     image = repo.get_image(image_id)
     if not image:
         raise FileNotFoundError(f"Image not found: {image_id}")
+    _validate_annotation_bounds(annotations)
     saved = repo.replace_image_annotations(image_id, annotations, review_status)
     image_path = Path(image["path"])
     project = repo.get_project(image["project_id"])

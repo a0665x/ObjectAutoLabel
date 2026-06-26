@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -66,9 +66,12 @@ class AnnotationUpdateItem(BaseModel):
     edited: bool = False
 
 
+ReviewStatus = Literal["unreviewed", "pending_review", "needs_fix", "reviewed", "skipped"]
+
+
 class AnnotationSaveRequest(BaseModel):
     annotations: list[AnnotationUpdateItem]
-    review_status: str = "reviewed"
+    review_status: ReviewStatus = "reviewed"
 
 
 class DatasetSplitCreate(BaseModel):

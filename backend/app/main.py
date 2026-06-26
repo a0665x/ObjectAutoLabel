@@ -144,10 +144,31 @@ def create_source(project_id: str, payload: SourceCreate) -> dict[str, Any]:
 
 
 @app.get("/api/projects/{project_id}/images")
-def list_project_images(project_id: str, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+def list_project_images(
+    project_id: str,
+    review_status: str | None = None,
+    has_low_confidence: bool | None = None,
+    source_asset_id: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
     if not repo.get_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
-    return repo.list_images(project_id, limit=limit, offset=offset)
+    return repo.list_images(
+        project_id,
+        review_status=review_status,
+        has_low_confidence=has_low_confidence,
+        source_asset_id=source_asset_id,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@app.get("/api/projects/{project_id}/review-stats")
+def get_review_stats(project_id: str) -> dict[str, int]:
+    if not repo.get_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    return repo.get_review_stats(project_id)
 
 
 @app.post("/api/projects/{project_id}/frame-runs")
@@ -222,6 +243,8 @@ def save_annotations(image_id: str, payload: AnnotationSaveRequest) -> dict[str,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/api/projects/{project_id}/dataset-splits")

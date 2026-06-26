@@ -1,0 +1,23 @@
+services:
+  object-autolabel:
+    build:
+      context: .
+      dockerfile: Dockerfile.jetson
+      args:
+        BASE_IMAGE: ${JETSON_BASE_IMAGE:-nvcr.io/nvidia/pytorch:25.06-py3-igpu}
+    image: object-autolabel:jetson
+    container_name: object-autolabel
+    runtime: nvidia
+    network_mode: host
+    shm_size: "2gb"
+    volumes:
+      - ./data:/app/data
+      - ./runs:/app/runs
+      - ./world_model:/app/world_model:ro
+      - ./input_model:/app/input_model:ro
+      - ./output_model:/app/output_model
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - YOLO_CONFIG_DIR=/tmp/ultralytics
+    restart: unless-stopped

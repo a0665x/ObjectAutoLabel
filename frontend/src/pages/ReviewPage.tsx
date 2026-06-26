@@ -8,6 +8,11 @@ import { AnnotationInspector } from "../components/review/AnnotationInspector";
 import { AnnotationToolbar } from "../components/review/AnnotationToolbar";
 import { ClassPalette } from "../components/review/ClassPalette";
 import { ImageQueue } from "../components/review/ImageQueue";
+import {
+  createReviewBaseline,
+  hasDirtyReviewState,
+  shouldProceedWithReviewNavigation
+} from "./reviewState";
 import type { Annotation, ClassItem, Project, ProjectImage, SourceAsset } from "../types";
 
 type ReviewPageProps = {
@@ -24,10 +29,6 @@ const EMPTY_STATS: ReviewStats = {
   edited: 0,
   low_confidence: 0
 };
-
-function serializeAnnotations(annotations: Annotation[]): string {
-  return JSON.stringify(annotations);
-}
 
 function normalizeReviewStatus(status: string): ReviewStatus {
   switch (status) {
@@ -50,7 +51,7 @@ export function ReviewPage({ project, t }: ReviewPageProps) {
   const [images, setImages] = useState<ProjectImage[]>([]);
   const [activeImageId, setActiveImageId] = useState<string | null>(null);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
-  const [baseline, setBaseline] = useState(serializeAnnotations([]));
+  const [baseline, setBaseline] = useState(() => createReviewBaseline([], "reviewed"));
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedClassId, setSelectedClassId] = useState<number | null>(null);
   const [mode, setMode] = useState<"select" | "draw" | "pan">("select");
@@ -69,7 +70,7 @@ export function ReviewPage({ project, t }: ReviewPageProps) {
     () => classes.find((item) => item.class_id === selectedClassId) ?? null,
     [classes, selectedClassId]
   );
-  const dirty = baseline !== serializeAnnotations(annotations);
+  const dirty = hasDirtyReviewState(baseline, annotations, reviewStatus);
 
   const refreshStats = useCallback(async () => {
     setStats(await api.reviewStats(project.id));
@@ -125,7 +126,8 @@ export function ReviewPage({ project, t }: ReviewPageProps) {
   useEffect(() => {
     if (!image) {
       setAnnotations([]);
-      setBaseline(serializeAnnotations([]));
+      setReviewStatus("reviewed");
+      setBaseline(createReviewBaseline([], "reviewed"));
       setSelectedId(null);
       return;
     }
@@ -137,10 +139,11 @@ export function ReviewPage({ project, t }: ReviewPageProps) {
     api.annotations(image.id)
       .then((result) => {
         if (ignore) return;
+        const nextReviewStatus = normalizeReviewStatus(result.image.review_status);
         setAnnotations(result.annotations);
-        setBaseline(serializeAnnotations(result.annotations));
+        setReviewStatus(nextReviewStatus);
+        setBaseline(createReviewBaseline(result.annotations, nextReviewStatus));
         setSelectedId(null);
-        setReviewStatus(normalizeReviewStatus(result.image.review_status));
       })
       .catch((reason: unknown) => {
         if (ignore) return;
@@ -242,11 +245,13 @@ export function ReviewPage({ project, t }: ReviewPageProps) {
     setSaving(true);
     setError(null);
     try {
+      const nextReviewStatus = normalizeReviewStatus(reviewStatus);
       const result = await api.saveAnnotations(image.id, { annotations, review_status: reviewStatus });
       setAnnotations(result.annotations);
-      setBaseline(serializeAnnotations(result.annotations));
+      setReviewStatus(nextReviewStatus);
+      setBaseline(createReviewBaseline(result.annotations, nextReviewStatus));
       setImages((current) =>
-        current.map((item) => (item.id === image.id ? { ...item, review_status: reviewStatus } : item))
+        current.map((item) => (item.id === image.id ? { ...item, review_status: nextReviewStatus } : item))
       );
       const nextImages = await api.images(project.id, filters);
       setImages(nextImages);
@@ -258,13 +263,15 @@ export function ReviewPage({ project, t }: ReviewPageProps) {
     }
   }, [annotations, filters, image, project.id, refreshStats, reviewStatus]);
 
+  const confirmReviewNavigation = useCallback(() => shouldProceedWithReviewNavigation(dirty, window.confirm), [dirty]);
+
   const navigateToIndex = useCallback(
     (nextIndex: number) => {
       if (nextIndex < 0 || nextIndex >= images.length) return;
-      if (dirty && !window.confirm("You have unsaved annotation changes. Switch images anyway?")) return;
+      if (!confirmReviewNavigation()) return;
       setActiveImageId(images[nextIndex].id);
     },
-    [dirty, images]
+    [confirmReviewNavigation, images]
   );
 
   const goPrevious = useCallback(() => {
@@ -397,10 +404,13 @@ export function ReviewPage({ project, t }: ReviewPageProps) {
           loading={loadingImages}
           onSelectImage={(id) => {
             if (id === activeImageId) return;
-            if (dirty && !window.confirm("You have unsaved annotation changes. Switch images anyway?")) return;
+            if (!confirmReviewNavigation()) return;
             setActiveImageId(id);
           }}
-          onFilterChange={(partial) => setFilters((current) => ({ ...current, ...partial }))}
+          onFilterChange={(partial) => {
+            if (!confirmReviewNavigation()) return;
+            setFilters((current) => ({ ...current, ...partial }));
+          }}
         />
         <AnnotationInspector
           image={image}

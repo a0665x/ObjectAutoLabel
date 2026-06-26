@@ -4,6 +4,7 @@ import { annotationReducer } from "../../annotation/reducer";
 import { clampRect, rectToYolo, yoloToRect } from "../../annotation/geometry";
 import type { Rect, Size } from "../../annotation/geometry";
 import type { Annotation, ClassItem, ProjectImage } from "../../types";
+import { getCanvasAffordance } from "./canvasAffordance";
 
 type AnnotationCanvasProps = {
   image: ProjectImage;
@@ -71,6 +72,7 @@ export function AnnotationCanvas({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [naturalSize, setNaturalSize] = useState<Size | null>(null);
+  const [renderedWidth, setRenderedWidth] = useState(0);
   const [interaction, setInteraction] = useState<Interaction | null>(null);
   const imageSize = useMemo<Size>(() => {
     const width = image.width ?? naturalSize?.width ?? 0;
@@ -89,6 +91,36 @@ export function AnnotationCanvas({
   useEffect(() => {
     setInteraction(null);
   }, [image.id, mode]);
+
+  useEffect(() => {
+    if (!overlayReady) {
+      setRenderedWidth(0);
+      return;
+    }
+
+    const element = svgRef.current;
+    if (!element) return;
+
+    const updateRenderedWidth = () => {
+      setRenderedWidth(element.getBoundingClientRect().width);
+    };
+
+    updateRenderedWidth();
+
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(updateRenderedWidth);
+      observer.observe(element);
+      return () => observer.disconnect();
+    }
+
+    window.addEventListener("resize", updateRenderedWidth);
+    return () => window.removeEventListener("resize", updateRenderedWidth);
+  }, [image.id, overlayReady]);
+
+  const affordance = useMemo(
+    () => getCanvasAffordance({ imageWidth: imageSize.width, renderedWidth }),
+    [imageSize.width, renderedWidth]
+  );
 
   function pointFromClient(event: { clientX: number; clientY: number }): Point {
     const bounds = svgRef.current?.getBoundingClientRect();
@@ -292,8 +324,14 @@ export function AnnotationCanvas({
             {rects.map(({ annotation, rect }) => {
               const selected = annotation.id === selectedId;
               const color = colorForClass(annotation.class_id);
-              const labelWidth = Math.max(54, annotation.class_name.length * 7 + 12);
-              const labelY = Math.max(0, rect.y - 24);
+              const labelWidth = Math.max(
+                affordance.minLabelWidth,
+                annotation.class_name.length * affordance.labelCharWidth + affordance.labelPaddingX * 2
+              );
+              const labelY =
+                rect.y >= affordance.labelHeight + affordance.labelGap
+                  ? rect.y - affordance.labelHeight - affordance.labelGap
+                  : Math.min(imageSize.height - affordance.labelHeight, rect.y + rect.height + affordance.labelGap);
               const handles = [
                 { key: "nw", x: rect.x, y: rect.y },
                 { key: "ne", x: rect.x + rect.width, y: rect.y },
@@ -308,15 +346,30 @@ export function AnnotationCanvas({
                     y={rect.y}
                     width={rect.width}
                     height={rect.height}
-                    rx={6}
-                    ry={6}
+                    rx={affordance.cornerRadius}
+                    ry={affordance.cornerRadius}
                     fill={selected ? `${color}22` : "transparent"}
                     stroke={color}
-                    strokeWidth={selected ? 3 : 2}
+                    strokeWidth={selected ? affordance.selectedStrokeWidth : affordance.strokeWidth}
+                    vectorEffect="non-scaling-stroke"
                     onPointerDown={(event) => handleBoxPointerDown(annotation, rect, event)}
                   />
-                  <rect x={rect.x} y={labelY} width={labelWidth} height={20} rx={6} ry={6} fill={color} />
-                  <text x={rect.x + 8} y={labelY + 14} fill="#081018" fontSize="12" fontWeight="700">
+                  <rect
+                    x={rect.x}
+                    y={labelY}
+                    width={labelWidth}
+                    height={affordance.labelHeight}
+                    rx={affordance.cornerRadius}
+                    ry={affordance.cornerRadius}
+                    fill={color}
+                  />
+                  <text
+                    x={rect.x + affordance.labelPaddingX}
+                    y={labelY + affordance.labelBaselineOffset}
+                    fill="#081018"
+                    fontSize={affordance.fontSize}
+                    fontWeight="700"
+                  >
                     {annotation.class_name}
                   </text>
                   {selected &&
@@ -326,10 +379,11 @@ export function AnnotationCanvas({
                         key={handle.key}
                         cx={handle.x}
                         cy={handle.y}
-                        r={7}
+                        r={affordance.handleRadius}
                         fill="#ffffff"
                         stroke={color}
-                        strokeWidth={2}
+                        strokeWidth={affordance.handleStrokeWidth}
+                        vectorEffect="non-scaling-stroke"
                         onPointerDown={(event) =>
                           handleHandlePointerDown(annotation, rect, handle.key, event)
                         }
@@ -344,12 +398,13 @@ export function AnnotationCanvas({
                 y={preview.y}
                 width={preview.width}
                 height={preview.height}
-                rx={6}
-                ry={6}
+                rx={affordance.cornerRadius}
+                ry={affordance.cornerRadius}
                 fill="rgba(10, 132, 255, 0.14)"
                 stroke="#0a84ff"
-                strokeDasharray="10 8"
-                strokeWidth={2}
+                strokeDasharray={affordance.previewDashArray}
+                strokeWidth={affordance.strokeWidth}
+                vectorEffect="non-scaling-stroke"
               />
             )}
           </svg>

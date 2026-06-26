@@ -28,3 +28,12 @@ export function shouldProceedWithReviewNavigation(
   if (!dirty) return true;
   return confirmNavigation(UNSAVED_REVIEW_CHANGES_MESSAGE);
 }
+
+export function shouldProceedWithReviewExit(
+  isReviewPage: boolean,
+  dirty: boolean,
+  confirmNavigation: (message: string) => boolean
+): boolean {
+  if (!isReviewPage) return true;
+  return shouldProceedWithReviewNavigation(dirty, confirmNavigation);
+}

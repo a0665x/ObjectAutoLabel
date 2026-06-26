@@ -4,6 +4,7 @@ import type { Annotation } from "../types";
 import {
   createReviewBaseline,
   hasDirtyReviewState,
+  shouldProceedWithReviewExit,
   shouldProceedWithReviewNavigation,
   UNSAVED_REVIEW_CHANGES_MESSAGE
 } from "./reviewState";
@@ -51,6 +52,20 @@ describe("reviewState", () => {
     const confirm = vi.fn(() => false);
 
     expect(shouldProceedWithReviewNavigation(true, confirm)).toBe(false);
+    expect(confirm).toHaveBeenCalledWith(UNSAVED_REVIEW_CHANGES_MESSAGE);
+  });
+
+  it("skips app-level confirmation outside the review page", () => {
+    const confirm = vi.fn(() => false);
+
+    expect(shouldProceedWithReviewExit(false, true, confirm)).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("requires confirmation for app-level exit when review is dirty", () => {
+    const confirm = vi.fn(() => true);
+
+    expect(shouldProceedWithReviewExit(true, true, confirm)).toBe(true);
     expect(confirm).toHaveBeenCalledWith(UNSAVED_REVIEW_CHANGES_MESSAGE);
   });
 });

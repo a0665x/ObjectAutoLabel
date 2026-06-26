@@ -15,6 +15,7 @@ import {
 import { api } from "./api/client";
 import { translate } from "./i18n";
 import { ReviewPage } from "./pages/ReviewPage";
+import { shouldProceedWithReviewExit } from "./pages/reviewState";
 import type { ClassSchema, Job, Language, ModelLists, Project, SourceAsset } from "./types";
 
 type Page = "projects" | "sources" | "schema" | "pseudo" | "review" | "split" | "train" | "export" | "settings";
@@ -37,6 +38,7 @@ export function App() {
   const [root, setRoot] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState("");
+  const [reviewDirty, setReviewDirty] = useState(false);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [models, setModels] = useState<ModelLists>({ world_models: [], input_models: [], output_models: [] });
   const t = (key: string) => translate(language, key);
@@ -67,6 +69,8 @@ export function App() {
     return () => window.clearInterval(timer);
   }, []);
 
+  const confirmReviewExit = () => shouldProceedWithReviewExit(page === "review", reviewDirty, window.confirm);
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -81,7 +85,15 @@ export function App() {
           {pages.map((item) => {
             const Icon = item.icon;
             return (
-              <button key={item.id} className={page === item.id ? "active" : ""} onClick={() => setPage(item.id)}>
+              <button
+                key={item.id}
+                className={page === item.id ? "active" : ""}
+                onClick={() => {
+                  if (item.id === page) return;
+                  if (!confirmReviewExit()) return;
+                  setPage(item.id);
+                }}
+              >
                 <Icon size={18} />
                 <span>{t(item.key)}</span>
               </button>
@@ -96,7 +108,15 @@ export function App() {
             <h1>{activeProject?.name ?? "ObjectAutoLabel"}</h1>
           </div>
           <div className="top-actions">
-            <select value={activeProjectId} onChange={(event) => setActiveProjectId(event.target.value)}>
+            <select
+              value={activeProjectId}
+              onChange={(event) => {
+                const nextProjectId = event.target.value;
+                if (nextProjectId === activeProjectId) return;
+                if (!confirmReviewExit()) return;
+                setActiveProjectId(nextProjectId);
+              }}
+            >
               {projects.map((project) => (
                 <option key={project.id} value={project.id}>
                   {project.name}
@@ -119,7 +139,7 @@ export function App() {
         {page === "sources" && activeProject && <SourcesPage t={t} project={activeProject} refresh={refresh} />}
         {page === "schema" && activeProject && <SchemaPage t={t} project={activeProject} />}
         {page === "pseudo" && activeProject && <PseudoPage t={t} project={activeProject} models={models} refreshJobs={refresh} />}
-        {page === "review" && activeProject && <ReviewPage t={t} project={activeProject} />}
+        {page === "review" && activeProject && <ReviewPage t={t} project={activeProject} onDirtyChange={setReviewDirty} />}
         {page === "split" && activeProject && <SplitPage t={t} project={activeProject} refreshJobs={refresh} />}
         {page === "train" && activeProject && <TrainPage project={activeProject} models={models} refreshJobs={refresh} t={t} />}
         {page === "export" && activeProject && <ExportPage project={activeProject} refreshJobs={refresh} t={t} />}

@@ -18,6 +18,7 @@ import type { Annotation, ClassItem, Project, ProjectImage, SourceAsset } from "
 type ReviewPageProps = {
   project: Project;
   t: (key: string) => string;
+  onDirtyChange?: (dirty: boolean) => void;
 };
 
 const EMPTY_STATS: ReviewStats = {
@@ -43,7 +44,7 @@ function normalizeReviewStatus(status: string): ReviewStatus {
   }
 }
 
-export function ReviewPage({ project, t }: ReviewPageProps) {
+export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
   const [sources, setSources] = useState<SourceAsset[]>([]);
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [stats, setStats] = useState<ReviewStats>(EMPTY_STATS);
@@ -71,6 +72,16 @@ export function ReviewPage({ project, t }: ReviewPageProps) {
     [classes, selectedClassId]
   );
   const dirty = hasDirtyReviewState(baseline, annotations, reviewStatus);
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(() => {
+    return () => {
+      onDirtyChange?.(false);
+    };
+  }, [onDirtyChange]);
 
   const refreshStats = useCallback(async () => {
     setStats(await api.reviewStats(project.id));

@@ -1,5 +1,25 @@
 import type { Annotation, ClassSchema, Job, ModelLists, Project, ProjectImage, SourceAsset } from "../types";
 
+export type ReviewStatus = "unreviewed" | "pending_review" | "needs_fix" | "reviewed" | "skipped";
+
+export type ReviewStats = {
+  unreviewed: number;
+  pending_review: number;
+  needs_fix: number;
+  reviewed: number;
+  skipped: number;
+  edited: number;
+  low_confidence: number;
+};
+
+export type ImageFilters = {
+  review_status?: ReviewStatus;
+  has_low_confidence?: boolean;
+  source_asset_id?: string;
+  limit?: number;
+  offset?: number;
+};
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
@@ -10,6 +30,21 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new Error(text || response.statusText);
   }
   return response.json() as Promise<T>;
+}
+
+function buildImageQuery(filters: ImageFilters): string {
+  const params = new URLSearchParams();
+
+  if (filters.review_status) params.set("review_status", filters.review_status);
+  if (typeof filters.has_low_confidence === "boolean") {
+    params.set("has_low_confidence", String(filters.has_low_confidence));
+  }
+  if (filters.source_asset_id) params.set("source_asset_id", filters.source_asset_id);
+  if (typeof filters.limit === "number") params.set("limit", String(filters.limit));
+  if (typeof filters.offset === "number") params.set("offset", String(filters.offset));
+
+  const query = params.toString();
+  return query ? `?${query}` : "";
 }
 
 export const api = {
@@ -37,7 +72,9 @@ export const api = {
     request<SourceAsset>(`/api/projects/${projectId}/sources`, { method: "POST", body: JSON.stringify(payload) }),
   extractFrames: (projectId: string, payload: Record<string, unknown>) =>
     request<Job>(`/api/projects/${projectId}/frame-runs`, { method: "POST", body: JSON.stringify(payload) }),
-  images: (projectId: string) => request<ProjectImage[]>(`/api/projects/${projectId}/images?limit=500`),
+  reviewStats: (projectId: string) => request<ReviewStats>(`/api/projects/${projectId}/review-stats`),
+  images: (projectId: string, filters: ImageFilters = {}) =>
+    request<ProjectImage[]>(`/api/projects/${projectId}/images${buildImageQuery({ limit: 500, ...filters })}`),
   annotations: (imageId: string) =>
     request<{ image: ProjectImage; annotations: Annotation[] }>(`/api/images/${imageId}/annotations`),
   saveAnnotations: (imageId: string, payload: { annotations: Annotation[]; review_status: string }) =>

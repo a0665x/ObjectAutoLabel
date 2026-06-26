@@ -2,23 +2,20 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Boxes,
   Brain,
-  ChevronLeft,
-  ChevronRight,
   Database,
   FolderInput,
   Languages,
-  Layers3,
   Play,
   Scissors,
   Settings,
   Sparkles,
   SquarePen,
-  Trash2,
   Upload
 } from "lucide-react";
 import { api } from "./api/client";
 import { translate } from "./i18n";
-import type { Annotation, ClassSchema, Job, Language, ModelLists, Project, ProjectImage, SourceAsset } from "./types";
+import { ReviewPage } from "./pages/ReviewPage";
+import type { ClassSchema, Job, Language, ModelLists, Project, SourceAsset } from "./types";
 
 type Page = "projects" | "sources" | "schema" | "pseudo" | "review" | "split" | "train" | "export" | "settings";
 
@@ -323,89 +320,6 @@ function PseudoPage({ project, models, refreshJobs, t }: { project: Project; mod
       </div>
       <button className="primary"><Play size={17} />{t("startPseudo")}</button>
     </form>
-  );
-}
-
-function ReviewPage({ project, t }: { project: Project; t: (key: string) => string }) {
-  const [images, setImages] = useState<ProjectImage[]>([]);
-  const [index, setIndex] = useState(0);
-  const [annotations, setAnnotations] = useState<Annotation[]>([]);
-  const image = images[index];
-  useEffect(() => {
-    api.images(project.id).then(setImages).catch(console.error);
-  }, [project.id]);
-  useEffect(() => {
-    if (image) api.annotations(image.id).then((result) => setAnnotations(result.annotations)).catch(console.error);
-  }, [image?.id]);
-  useEffect(() => {
-    const handler = (event: KeyboardEvent) => {
-      if (event.key === "ArrowLeft") setIndex((value) => Math.max(0, value - 1));
-      if (event.key === "ArrowRight") setIndex((value) => Math.min(images.length - 1, value + 1));
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [images.length]);
-  return (
-    <section className="review-layout">
-      <div className="image-stage">
-        {image ? <img src={`/api/files?path=${encodeURIComponent(image.path)}`} alt="" /> : <span>No images</span>}
-        {annotations.map((item, itemIndex) => (
-          <div
-            key={item.id ?? itemIndex}
-            className="bbox"
-            style={{
-              left: `${(item.x_center - item.width / 2) * 100}%`,
-              top: `${(item.y_center - item.height / 2) * 100}%`,
-              width: `${item.width * 100}%`,
-              height: `${item.height * 100}%`
-            }}
-          >
-            <span>{item.class_name}</span>
-          </div>
-        ))}
-      </div>
-      <aside className="panel inspector">
-        <div className="field-row">
-          <button type="button" onClick={() => setIndex(Math.max(0, index - 1))}><ChevronLeft size={18} /></button>
-          <button type="button" onClick={() => setIndex(Math.min(images.length - 1, index + 1))}><ChevronRight size={18} /></button>
-        </div>
-        <strong>{image?.path ?? "No image"}</strong>
-        {annotations.map((item, itemIndex) => (
-          <div className="annotation-row" key={item.id ?? itemIndex}>
-            <label>
-              {item.source_descriptor ?? item.class_name}
-              <input
-                value={item.class_id}
-                type="number"
-                onChange={(event) => {
-                  const next = [...annotations];
-                  next[itemIndex] = { ...item, class_id: Number(event.target.value), edited: true };
-                  setAnnotations(next);
-                }}
-              />
-            </label>
-            <button
-              type="button"
-              className="icon-danger"
-              title="Delete annotation"
-              onClick={() => setAnnotations(annotations.filter((_, currentIndex) => currentIndex !== itemIndex))}
-            >
-              <Trash2 size={16} />
-            </button>
-          </div>
-        ))}
-        <button
-          className="primary"
-          disabled={!image}
-          onClick={async () => {
-            if (!image) return;
-            await api.saveAnnotations(image.id, { annotations, review_status: "reviewed" });
-          }}
-        >
-          {t("saveAnnotations")}
-        </button>
-      </aside>
-    </section>
   );
 }
 

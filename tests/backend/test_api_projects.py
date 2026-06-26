@@ -46,19 +46,44 @@ def test_create_class_schema_via_api(tmp_path: Path) -> None:
 def test_images_can_be_filtered_by_review_status(tmp_path: Path) -> None:
     repo = make_repo(tmp_path)
     project = repo.create_project(ProjectCreate(name="Filter API").name)
-    reviewed = repo.create_image(project["id"], str(tmp_path / "reviewed.jpg"))
-    repo.create_image(project["id"], str(tmp_path / "pending.jpg"))
+    source_a = repo.create_source_asset(project["id"], "image_folder", str(tmp_path / "source-a"))
+    source_b = repo.create_source_asset(project["id"], "image_folder", str(tmp_path / "source-b"))
+    reviewed = repo.create_image(project["id"], str(tmp_path / "reviewed.jpg"), source_asset_id=source_a["id"])
+    pending = repo.create_image(project["id"], str(tmp_path / "pending.jpg"), source_asset_id=source_b["id"])
     repo.replace_image_annotations(reviewed["id"], [], review_status="reviewed")
+    repo.replace_image_annotations(
+        pending["id"],
+        [
+            {
+                "class_id": 0,
+                "class_name": "object",
+                "x_center": 0.5,
+                "y_center": 0.5,
+                "width": 0.3,
+                "height": 0.3,
+                "confidence": 0.4,
+                "source_type": "pseudo",
+                "edited": False,
+            }
+        ],
+        review_status="pending_review",
+    )
 
     original_repo = main.repo
     main.repo = repo
     try:
-        response = main.list_project_images(project["id"], review_status="reviewed")
+        payload = main.list_project_images(
+            project["id"],
+            review_status="pending_review",
+            has_low_confidence=True,
+            source_asset_id=source_b["id"],
+        )
     finally:
         main.repo = original_repo
 
-    assert all(item["review_status"] == "reviewed" for item in response)
-    assert [item["id"] for item in response] == [reviewed["id"]]
+    assert all(item["review_status"] == "pending_review" for item in payload)
+    assert all(item["source_asset_id"] == source_b["id"] for item in payload)
+    assert [item["id"] for item in payload] == [pending["id"]]
 
 
 def test_review_stats_counts_statuses_and_low_confidence(tmp_path: Path) -> None:
@@ -104,10 +129,11 @@ def test_review_stats_counts_statuses_and_low_confidence(tmp_path: Path) -> None
     original_repo = main.repo
     main.repo = repo
     try:
-        response = main.get_review_stats(project["id"])
+        payload = main.get_review_stats(project["id"])
     finally:
         main.repo = original_repo
 
-    assert response["pending_review"] == 1
-    assert response["reviewed"] == 1
-    assert response["low_confidence"] == 1
+    assert payload["pending_review"] == 1
+    assert payload["reviewed"] == 1
+    assert payload["edited"] == 1
+    assert payload["low_confidence"] == 1

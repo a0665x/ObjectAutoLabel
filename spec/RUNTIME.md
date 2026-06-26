@@ -75,8 +75,9 @@ STRICT_RUNTIME_CHECK=1 ./run.sh --detect
 
 - `./data:/app/data`
 - `./runs:/app/runs`
-- Current `AppPaths` expects model folders named `world_model/`, `input_model/`, and `output_model/` under the project root.
-- Current compose files still mount legacy `models/` and `yolo_model/` paths; align compose mounts before relying on model discovery inside Docker.
+- `./world_model:/app/world_model:ro`
+- `./input_model:/app/input_model:ro`
+- `./output_model:/app/output_model`
 
 ## Environment Assumptions
 

@@ -1,0 +1,31 @@
+ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:25.06-py3-igpu
+FROM ${BASE_IMAGE}
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    YOLO_CONFIG_DIR=/tmp/ultralytics \
+    DEBIAN_FRONTEND=noninteractive
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3-opencv libgl1 libglib2.0-0 ffmpeg git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-jetson.txt /app/requirements-jetson.txt
+RUN python3 -m pip install --upgrade pip \
+    && python3 -m pip install -r /app/requirements-jetson.txt \
+    && python3 -m pip install git+https://github.com/ultralytics/CLIP.git@main
+
+COPY backend /app/backend
+COPY frontend /app/frontend
+COPY models /app/models
+COPY yolo_model /app/yolo_model
+
+RUN mkdir -p /app/data/input /app/data/output /app/data/datasets /app/runs
+
+EXPOSE 8501
+EXPOSE 8081
+
+CMD ["python3", "-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8501"]

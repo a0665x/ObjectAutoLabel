@@ -1,0 +1,41 @@
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+from backend.app.config import AppPaths
+from backend.app.db import connect, initialize_schema
+from backend.app.project_services import save_image_annotations
+from backend.app.repositories import Repository
+
+
+def test_save_annotations_writes_yolo_label_file(tmp_path: Path) -> None:
+    db = connect(tmp_path / "test.db")
+    initialize_schema(db)
+    repo = Repository(db=db, paths=AppPaths(project_root=tmp_path))
+    project = repo.create_project("Annot API")
+    image_path = Path(project["root_path"]) / "sources" / "image.jpg"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(image_path), np.zeros((20, 30, 3), dtype=np.uint8))
+    image = repo.create_image(project["id"], str(image_path), width=30, height=20)
+
+    result = save_image_annotations(
+        repo,
+        image_id=image["id"],
+        review_status="reviewed",
+        annotations=[
+            {
+                "class_id": 1,
+                "class_name": "car",
+                "x_center": 0.5,
+                "y_center": 0.5,
+                "width": 0.2,
+                "height": 0.3,
+                "source_type": "manual",
+                "edited": True,
+            }
+        ],
+    )
+
+    label_path = Path(result["label_path"])
+    assert label_path.read_text(encoding="utf-8") == "1 0.500000 0.500000 0.200000 0.300000"

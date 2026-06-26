@@ -19,14 +19,14 @@ Most long-running endpoints return a job record. Poll `GET /api/jobs` for recent
 ## Endpoints
 
 - `GET /api/health`: backend liveness and project root.
-- `GET /api/files?path=<file>`: serves a local file path when it exists.
+- `GET /api/files?path=<file>`: serves a registered image or a file under a safe project output directory.
 - `GET /api/projects`: list projects.
 - `POST /api/projects`: create a project.
 - `GET /api/projects/{project_id}`: get one project.
 - `GET /api/projects/{project_id}/class-schemas`: list class schemas.
 - `POST /api/projects/{project_id}/class-schemas`: create a class schema.
-- `GET /api/models/world`: lists `world_model/*.pt`.
-- `GET /api/models/input`: lists `input_model/*.pt`.
+- `GET /api/models/world`: lists `.pt` and `.pth` weights from `world_model/`.
+- `GET /api/models/input`: lists `.pt` and `.pth` weights from `input_model/`.
 - `GET /api/models/output`: lists trained and exported artifacts from `output_model/`.
 - `GET /api/jobs`: recent jobs.
 - `GET /api/jobs/{job_id}`: one job.
@@ -54,12 +54,12 @@ Most long-running endpoints return a job record. Poll `GET /api/jobs` for recent
 
 ## Model Folder Contract
 
-- `GET /api/models/world` reads `.pt` files from `world_model/`.
-- `GET /api/models/input` reads `.pt` files from `input_model/`.
-- `GET /api/models/output` reads exported artifacts from `output_model/`, including nested project subdirectories and `.pt`, `.onnx`, `.torchscript`, and `.tflite` outputs.
+- `GET /api/models/world` reads `.pt` and `.pth` files from `world_model/`.
+- `GET /api/models/input` reads `.pt` and `.pth` files from `input_model/`.
+- `GET /api/models/output` reads exported artifacts from `output_model/`, including nested project subdirectories and `.pt`, `.pth`, `.onnx`, `.torchscript`, and `.tflite` outputs.
 
 ## API Safety Notes
 
-- Paths are local/container paths. There is no sandboxing by user inside the app.
-- `GET /api/files` can serve arbitrary readable local files by path and should not be exposed beyond trusted local use without path restrictions.
+- Paths are local/container paths. There is no per-user sandboxing inside the app.
+- `GET /api/files` only serves known image paths or files under project `frames`, `metadata`, `pseudo_labels`, `reviewed_labels`, `sources`, and `splits` directories. Treat the app as trusted local tooling, not a public multi-user service.
 - Job records are persisted in SQLite, but active job execution is process-local; restarting the container stops in-flight work.

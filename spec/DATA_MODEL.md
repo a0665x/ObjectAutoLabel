@@ -41,7 +41,7 @@ All coordinates are normalized to the source image width and height.
 - `data/projects/<slug>/reviewed_labels`: corrected labels saved from the review UI.
 - `data/projects/<slug>/splits`: generated train/val/test splits and dataset YAML.
 - `data/projects/<slug>/metadata`: project metadata outputs.
-- `world_model`: YOLO-World models.
-- `input_model`: standard YOLO input models.
-- `output_model`: trained/exported `.pt`, `.tflite`, `.onnx`, and `.torchscript` models.
-- `output_model/<project_id>`: training outputs and exported artifacts.
+- `world_model`: YOLO-World `.pt` and `.pth` weights.
+- `input_model`: standard YOLO `.pt` and `.pth` input weights.
+- `output_model`: trained/exported `.pt`, `.pth`, `.tflite`, `.onnx`, and `.torchscript` models.
+- `output_model/<project_id>`: Ultralytics training outputs and exported artifacts for one project id.

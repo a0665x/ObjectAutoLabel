@@ -25,8 +25,8 @@
 
 ## Runtime Folders
 
-- `world_model/`: YOLO-World `.pt` files offered on the pseudo-label screen and through `GET /api/models/world`.
-- `input_model/`: training input `.pt` files offered on the train screen and through `GET /api/models/input`.
+- `world_model/`: YOLO-World `.pt` or `.pth` weights offered on the pseudo-label screen and through `GET /api/models/world`.
+- `input_model/`: training input `.pt` or `.pth` weights offered on the train screen and through `GET /api/models/input`.
 - `output_model/`: exported and trained artifacts surfaced on the settings/export screens and through `GET /api/models/output`.
 - `data/projects/<slug>/reviewed_labels/`: YOLO label files written by annotation saves.
 
@@ -36,7 +36,7 @@
 - `l4t-pytorch:* not found`: JetPack 6+ uses NVIDIA PyTorch `*-py3-igpu` containers instead of newer `l4t-pytorch` tags. The Jetson default is `nvcr.io/nvidia/pytorch:25.06-py3-igpu`.
 - Wrong image selected: run `./run.sh --detect` and verify architecture, L4T, JetPack, and `JETSON_BASE_IMAGE`. Override with `JETSON_BASE_IMAGE=... ./run.sh --up` if needed.
 - `gpus: all` fails: NVIDIA Container Toolkit is missing or Docker cannot access GPU.
-- Model not found: ensure the `.pt` file exists in `world_model/`, `input_model/`, or `output_model/`, depending on the screen.
+- Model not found: ensure the `.pt` or `.pth` file exists in `world_model/`, `input_model/`, or `output_model/`, depending on the screen.
 - Video path not found: the browser path must be a container-visible path such as `/app/data/input/file.mp4`.
 - Annotation save rejected: bbox coordinates must remain normalized and inside image bounds; invalid rectangles return HTTP 422 and do not update the label file.
 - TFLite export errors: TensorFlow/ONNX conversion dependencies are sensitive to model type and installed versions.

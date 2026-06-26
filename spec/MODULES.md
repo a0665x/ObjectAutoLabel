@@ -14,6 +14,11 @@
 - `backend/app/services.py`: older migrated service functions retained for compatibility or reference.
 - `frontend/src/App.tsx`: React single-page UI and workflow screens.
 - `frontend/src/api/client.ts`: frontend API wrapper.
+- `frontend/src/annotation/`: normalized bbox geometry and annotation reducer logic.
+- `frontend/src/pages/ReviewPage.tsx`: offline review workbench state orchestration.
+- `frontend/src/pages/reviewConfig.ts`: review status and queue filter options.
+- `frontend/src/pages/reviewState.ts`: review-page helper state functions.
+- `frontend/src/components/review/`: SVG canvas, toolbar, class palette, inspector, and image queue components.
 - `frontend/src/i18n.ts`: UI translations.
 - `frontend/src/styles.css`: responsive visual system and interaction styling.
 - `frontend/dist/`: built frontend served by FastAPI when present.

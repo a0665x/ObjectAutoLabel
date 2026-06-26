@@ -43,8 +43,8 @@ For local frontend development, run Vite separately and let its dev proxy talk t
 ## Data Layout
 
 - `data/projects/`: local project state, registered sources, reviewed labels, and dataset splits.
-- `world_model/`: YOLO-World `.pt` weights used for pseudo-labeling.
-- `input_model/`: YOLO `.pt` weights used as training inputs.
+- `world_model/`: YOLO-World `.pt` or `.pth` weights used for pseudo-labeling.
+- `input_model/`: YOLO `.pt` or `.pth` weights used as training inputs.
 - `output_model/`: trained and exported model artifacts produced by this app.
 - `runs`: Ultralytics training outputs.
 

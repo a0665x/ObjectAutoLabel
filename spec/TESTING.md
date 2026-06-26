@@ -9,7 +9,7 @@ This project currently has smoke-test and focused unit/integration validation:
 - Backend pytest coverage for repositories, jobs, DB schema, annotations API, model listing, project services, label IO, and YOLO-World helpers.
 - Frontend TypeScript/Vite build and Vitest coverage for review-state, annotation reducer, geometry helpers, and canvas affordance behavior.
 
-## Task 6 Verification Commands
+## Verification Commands
 
 ```bash
 pytest -v

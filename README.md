@@ -93,11 +93,25 @@ On Jetson, the app binds `127.0.0.1:8501` by default to avoid conflicts with Tai
 
 - `data/projects/<slug>/`: project-owned workspace, copied sources, labels, splits, augmentations, models, conversions, and exports.
 - `data/input/`: reusable raw input media. Project deletion does not remove these files.
-- `world_model/`: YOLO-World `.pt`/`.pth` weights for Pseudo.
+- `world_model/`: YOLO-World `.pt`/`.pth` weights for Pseudo. Docker build does not download these weights.
 - `input_model/`: YOLO `.pt`/`.pth` weights for Train.
 - `output_model/`: global compatibility/index surface. Project entries are symlinks to `data/projects/<slug>/output_model/`.
 
 Deleting a project package removes its DB rows, jobs, project workspace, and project model-index entry. It does not delete raw `data/input/`.
+
+### Install a YOLO-World model
+
+After a fresh clone, manually download or copy at least one compatible
+YOLO-World `.pt` or `.pth` file into the host `world_model/` directory:
+
+```bash
+mkdir -p world_model
+cp /path/to/yolov8m-world.pt world_model/
+```
+
+The directory is bind-mounted read-only at `/app/world_model` inside the
+container. Adding a weight file does not require rebuilding the Docker image;
+refresh the Pseudo page to update its model list.
 
 ## Workflow
 

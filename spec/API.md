@@ -72,7 +72,7 @@ Most long-running endpoints return a job record. Poll `GET /api/jobs` for recent
 
 ## Model Folder Contract
 
-- `GET /api/models/world` reads `.pt` and `.pth` files from `world_model/`.
+- `GET /api/models/world` reads `.pt` and `.pth` files from `world_model/`. It only lists local files and does not download weights.
 - `GET /api/models/input` reads `.pt` and `.pth` files from `input_model/`.
 - `GET /api/models/output` reads exported artifacts from `output_model/`, including project symlinks, nested legacy directories, and `.pt`, `.pth`, `.onnx`, `.torchscript`, and `.tflite` outputs.
 

@@ -34,7 +34,7 @@
 
 ## Runtime Folders
 
-- `world_model/`: YOLO-World `.pt` or `.pth` weights offered on the pseudo-label screen and through `GET /api/models/world`.
+- `world_model/`: YOLO-World `.pt` or `.pth` weights offered on the pseudo-label screen and through `GET /api/models/world`. Docker build does not populate this directory; after a fresh clone, the operator must download or copy at least one compatible weight file here. Because this host directory is bind-mounted into the container, adding a weight does not require an image rebuild.
 - `input_model/`: training input `.pt` or `.pth` weights offered on the train screen and through `GET /api/models/input`.
 - `data/input/`: raw user-provided images and videos. Project deletion does not remove these files.
 - `data/projects/<slug>/sources/`: copied project image sources and extracted video frames.
@@ -62,7 +62,8 @@
   `scripts/verify-runtime.sh --train jetson`. Container startup and
   `torch.cuda.is_available()` alone do not prove Ultralytics can complete a
   CUDA training run.
-- Model not found: ensure the `.pt` or `.pth` file exists in `world_model/`, `input_model/`, or `output_model/`, depending on the screen.
+- No model is offered on Pseudo after a fresh build: Docker does not download YOLO-World weights. Download or copy a compatible `.pt` or `.pth` file into the host `world_model/` directory, then refresh the page; an image rebuild is not required.
+- Model not found: ensure the selected `.pt` or `.pth` file still exists in `world_model/`, `input_model/`, or `output_model/`, depending on the screen.
 - Video path not found: the browser path must be a container-visible path such as `/app/data/input/file.mp4`.
 - LAN URL mismatch: `run.sh` auto-detects the primary LAN IPv4. If a specific wired address is required, run `OBJECT_AUTOLABEL_BIND_HOST=<ip> ./run.sh --down_up`. Check current host addresses with `ip -4 addr show`.
 - Jetson container cannot bind `0.0.0.0:8501`: another interface-specific listener, often Tailscale serve on `100.x.x.x:8501`, can make wildcard bind fail. Use the Jetson compose default `OBJECT_AUTOLABEL_BIND_HOST=127.0.0.1` for the local WebUI at `http://127.0.0.1:8501/`.

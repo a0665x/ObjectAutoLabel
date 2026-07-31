@@ -51,9 +51,12 @@ api_key.txt
 
 # Codex / agent / local workflow state
 .codex/
+/.codex-*
 .agents/
 .superpowers/
 .gstack/
+/memory/
+/docs/superpowers/
 
 # OS / editor
 .DS_Store

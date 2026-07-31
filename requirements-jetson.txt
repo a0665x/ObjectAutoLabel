@@ -6,7 +6,10 @@ ultralytics==8.3.78
 supervision==0.25.1
 roboflow==1.1.61
 netron==8.2.7
-numpy>=1.22.0
+# NVIDIA PyTorch nv25.06 is built against NumPy 1.x ABI; keep NumPy below 2.
+numpy>=1.26.0,<2.0
+# Avoid newer opencv-python releases that require NumPy 2 on Python 3.12.
+opencv-python<4.12
 pillow==10.4.0
 requests-toolbelt==1.0.0
 ftfy==6.3.1
@@ -14,3 +17,13 @@ regex==2024.11.6
 onnx==1.16.1
 onnxruntime==1.21.0
 onnxslim==0.1.49
+# Ultralytics TFLite export dependencies for Jetson/aarch64.
+# Keep these preinstalled so conversion jobs do not block on runtime pip installs.
+tensorflow-aarch64==2.16.1
+tf-keras==2.16.0
+sng4onnx>=1.0.1
+onnx-graphsurgeon>=0.3.26
+onnx2tf>1.17.5,<=1.26.3
+tflite-support<=0.4.3
+# tensorflow-aarch64 2.16.x is not compatible with protobuf 5+ on Jetson.
+protobuf>=3.20.3,<5

@@ -1,15 +1,20 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+def default_project_root() -> Path:
+    return Path(os.environ.get("OBJECT_AUTOLABEL_PROJECT_ROOT", PROJECT_ROOT))
+
+
 @dataclass(frozen=True)
 class AppPaths:
-    project_root: Path = PROJECT_ROOT
+    project_root: Path = field(default_factory=default_project_root)
 
     @property
     def data_dir(self) -> Path:
@@ -37,7 +42,7 @@ class AppPaths:
 
     @property
     def database_path(self) -> Path:
-        return self.project_root / "object_autolabel.db"
+        return self.data_dir / "object_autolabel.db"
 
 
 def ensure_runtime_dirs(paths: AppPaths = AppPaths()) -> None:

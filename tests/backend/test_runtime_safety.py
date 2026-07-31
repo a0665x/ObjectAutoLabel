@@ -88,3 +88,5 @@ def test_allowed_cors_origins_are_local_only() -> None:
     assert "*" not in main.ALLOWED_CORS_ORIGINS
     assert "http://localhost:5173" in main.ALLOWED_CORS_ORIGINS
     assert "http://127.0.0.1:8501" in main.ALLOWED_CORS_ORIGINS
+    assert "http://10.42.0.21:8501" in main.ALLOWED_CORS_ORIGINS
+    assert "http://100.94.21.85:8501" in main.ALLOWED_CORS_ORIGINS

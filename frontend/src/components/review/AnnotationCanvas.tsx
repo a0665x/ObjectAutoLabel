@@ -10,10 +10,13 @@ type AnnotationCanvasProps = {
   image: ProjectImage;
   annotations: Annotation[];
   selectedId: string | null;
+  selectedIds?: string[];
   selectedClass: ClassItem | null;
   mode: "select" | "draw" | "pan";
   onChange: (annotations: Annotation[]) => void;
   onSelect: (id: string | null) => void;
+  onSelectMany?: (ids: string[]) => void;
+  onContextMenu?: (annotationId: string, point: { x: number; y: number }) => void;
 };
 
 type Point = { x: number; y: number };
@@ -22,7 +25,8 @@ type Interaction =
   | { kind: "draw"; start: Point; current: Point }
   | { kind: "move"; id: string; pointerStart: Point; rectStart: Rect }
   | { kind: "resize"; id: string; anchor: Point }
-  | { kind: "pan"; startClient: Point; scrollLeft: number; scrollTop: number };
+  | { kind: "pan"; startClient: Point; scrollLeft: number; scrollTop: number }
+  | { kind: "lasso"; start: Point; current: Point };
 
 const CLASS_SWATCHES = ["#0a84ff", "#30d158", "#ff9f0a", "#ff375f", "#5e5ce6", "#64d2ff", "#bf5af2", "#ffd60a"];
 
@@ -60,14 +64,21 @@ function previewRect(start: Point, current: Point): Rect {
   };
 }
 
+function rectsIntersect(a: Rect, b: Rect) {
+  return a.x <= b.x + b.width && a.x + a.width >= b.x && a.y <= b.y + b.height && a.y + a.height >= b.y;
+}
+
 export function AnnotationCanvas({
   image,
   annotations,
   selectedId,
+  selectedIds = [],
   selectedClass,
   mode,
   onChange,
-  onSelect
+  onSelect,
+  onSelectMany,
+  onContextMenu
 }: AnnotationCanvasProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -169,6 +180,13 @@ export function AnnotationCanvas({
       return;
     }
 
+    if (mode === "select") {
+      onSelect(null);
+      onSelectMany?.([]);
+      setInteraction({ kind: "lasso", start: point, current: point });
+      return;
+    }
+
     onSelect(null);
   }
 
@@ -188,6 +206,7 @@ export function AnnotationCanvas({
     }
 
     onSelect(annotation.id);
+    onSelectMany?.([annotation.id]);
     if (mode !== "select") return;
 
     setInteraction({
@@ -233,6 +252,11 @@ export function AnnotationCanvas({
       return;
     }
 
+    if (interaction.kind === "lasso") {
+      setInteraction({ ...interaction, current: point });
+      return;
+    }
+
     if (interaction.kind === "move") {
       const dx = point.x - interaction.pointerStart.x;
       const dy = point.y - interaction.pointerStart.y;
@@ -251,6 +275,8 @@ export function AnnotationCanvas({
       );
       return;
     }
+
+    if (interaction.kind !== "resize") return;
 
     updateAnnotation(
       annotationReducer(annotations, {
@@ -292,11 +318,20 @@ export function AnnotationCanvas({
       }
     }
 
+    if (interaction.kind === "lasso") {
+      const endPoint = pointFromClient(event);
+      const rect = clampRect(previewRect(interaction.start, endPoint), imageSize);
+      const selected = rects.filter(({ rect: item }) => rectsIntersect(rect, item)).map(({ annotation }) => annotation.id);
+      onSelectMany?.(selected);
+      onSelect(selected[0] ?? null);
+    }
+
     releasePointerCapture(event.pointerId);
     setInteraction(null);
   }
 
   const preview = interaction?.kind === "draw" ? clampRect(previewRect(interaction.start, interaction.current), imageSize) : null;
+  const lassoPreview = interaction?.kind === "lasso" ? clampRect(previewRect(interaction.start, interaction.current), imageSize) : null;
   const imageUrl = `/api/files?path=${encodeURIComponent(image.path)}`;
 
   return (
@@ -322,7 +357,7 @@ export function AnnotationCanvas({
             onPointerUp={handlePointerUp}
           >
             {rects.map(({ annotation, rect }) => {
-              const selected = annotation.id === selectedId;
+              const selected = annotation.id === selectedId || selectedIds.includes(annotation.id);
               const color = colorForClass(annotation.class_id);
               const labelWidth = Math.max(
                 affordance.minLabelWidth,
@@ -353,6 +388,13 @@ export function AnnotationCanvas({
                     strokeWidth={selected ? affordance.selectedStrokeWidth : affordance.strokeWidth}
                     vectorEffect="non-scaling-stroke"
                     onPointerDown={(event) => handleBoxPointerDown(annotation, rect, event)}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onSelect(annotation.id);
+                      onSelectMany?.(selectedIds.includes(annotation.id) ? selectedIds : [annotation.id]);
+                      onContextMenu?.(annotation.id, { x: event.clientX, y: event.clientY });
+                    }}
                   />
                   <rect
                     x={rect.x}
@@ -402,6 +444,21 @@ export function AnnotationCanvas({
                 ry={affordance.cornerRadius}
                 fill="rgba(10, 132, 255, 0.14)"
                 stroke="#0a84ff"
+                strokeDasharray={affordance.previewDashArray}
+                strokeWidth={affordance.strokeWidth}
+                vectorEffect="non-scaling-stroke"
+              />
+            )}
+            {lassoPreview && (
+              <rect
+                x={lassoPreview.x}
+                y={lassoPreview.y}
+                width={lassoPreview.width}
+                height={lassoPreview.height}
+                rx={affordance.cornerRadius}
+                ry={affordance.cornerRadius}
+                fill="rgba(48, 209, 88, 0.10)"
+                stroke="#30d158"
                 strokeDasharray={affordance.previewDashArray}
                 strokeWidth={affordance.strokeWidth}
                 vectorEffect="non-scaling-stroke"

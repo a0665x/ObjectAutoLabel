@@ -113,4 +113,35 @@ describe("annotationReducer", () => {
       }
     ]);
   });
+
+  it("merges overlapping boxes only when they share the same training class", () => {
+    const carHighConfidence = makeAnnotation({ id: "car-high", confidence: 0.9, source_descriptor: "car" });
+    const carLowConfidence = makeAnnotation({
+      id: "car-low",
+      confidence: 0.4,
+      source_descriptor: "aerial view car",
+      x_center: 0.51,
+      y_center: 0.5
+    });
+    const personOverlap = makeAnnotation({
+      id: "person-overlap",
+      class_id: 0,
+      class_name: "person",
+      source_descriptor: "pedestrian",
+      x_center: 0.51,
+      y_center: 0.5
+    });
+
+    expect(
+      annotationReducer([carHighConfidence, carLowConfidence, personOverlap], { type: "mergeSameClass", iouThreshold: 0.7 })
+    ).toEqual([
+      {
+        ...carHighConfidence,
+        source_descriptor: "car | aerial view car",
+        source_type: "pseudo_merged",
+        edited: true
+      },
+      personOverlap
+    ]);
+  });
 });

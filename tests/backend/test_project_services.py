@@ -26,3 +26,23 @@ def test_register_image_folder_creates_image_records(tmp_path: Path) -> None:
     assert result == {"registered_images": 1}
     assert images[0]["width"] == 30
     assert images[0]["height"] == 20
+
+
+def test_register_image_folder_copies_images_into_project_sources(tmp_path: Path) -> None:
+    db = connect(tmp_path / "test.db")
+    initialize_schema(db)
+    repo = Repository(db=db, paths=AppPaths(project_root=tmp_path))
+    project = repo.create_project("Copied Images")
+    raw_dir = tmp_path / "data" / "input" / "raw"
+    raw_dir.mkdir(parents=True)
+    image = np.zeros((12, 16, 3), dtype=np.uint8)
+    cv2.imwrite(str(raw_dir / "a.jpg"), image)
+    source = repo.create_source_asset(project["id"], "image_folder", str(raw_dir))
+
+    register_image_folder(repo, project["id"], source["id"], str(raw_dir))
+
+    images = repo.list_images(project["id"])
+    copied_path = Path(images[0]["path"])
+    assert copied_path.parent == Path(project["root_path"]) / "sources" / source["id"] / "images"
+    assert copied_path.exists()
+    assert copied_path.read_bytes() == (raw_dir / "a.jpg").read_bytes()

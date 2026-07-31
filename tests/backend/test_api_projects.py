@@ -4,7 +4,7 @@ from backend.app import main
 from backend.app.config import AppPaths
 from backend.app.db import connect, initialize_schema
 from backend.app.repositories import Repository
-from backend.app.schemas import ClassDescriptorItem, ClassSchemaCreate, ProjectCreate
+from backend.app.schemas import ClassDescriptorItem, ClassSchemaCreate, FrameRunCreate, ProjectCreate
 
 
 def make_repo(tmp_path: Path) -> Repository:
@@ -21,6 +21,45 @@ def test_create_and_list_project(tmp_path: Path) -> None:
     assert project["name"] == "API Demo"
     assert project["slug"].startswith("api-demo")
     assert any(item["id"] == project["id"] for item in repo.list_projects())
+
+
+def test_project_storage_status_and_stale_cleanup_api(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    project = repo.create_project(ProjectCreate(name="Stale API").name)
+    import shutil
+    shutil.rmtree(Path(project["root_path"]))
+    original_repo = main.repo
+    main.repo = repo
+    try:
+        status = main.get_project_storage_status(project["id"])
+        cleanup = main.cleanup_stale_project(project["id"])
+    finally:
+        main.repo = original_repo
+
+    assert status["is_stale"] is True
+    assert "project workspace" in status["missing"]
+    assert cleanup == {"ok": True}
+    assert repo.get_project(project["id"]) is None
+
+
+def test_cleanup_stale_project_api_refuses_healthy_project(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    project = repo.create_project(ProjectCreate(name="Healthy API").name)
+    original_repo = main.repo
+    main.repo = repo
+    try:
+        try:
+            main.cleanup_stale_project(project["id"])
+        except main.HTTPException as exc:
+            error = exc
+        else:
+            error = None
+    finally:
+        main.repo = original_repo
+
+    assert error is not None
+    assert error.status_code == 409
+    assert repo.get_project(project["id"]) is not None
 
 
 def test_create_class_schema_via_api(tmp_path: Path) -> None:
@@ -137,3 +176,26 @@ def test_review_stats_counts_statuses_and_low_confidence(tmp_path: Path) -> None
     assert payload["reviewed"] == 1
     assert payload["edited"] == 1
     assert payload["low_confidence"] == 1
+
+
+def test_frame_extraction_uses_project_sources_directory(tmp_path: Path, monkeypatch) -> None:
+    repo = make_repo(tmp_path)
+    project = repo.create_project("Video Project")
+    video_path = tmp_path / "data" / "input" / "video.mp4"
+    video_path.parent.mkdir(parents=True)
+    video_path.write_text("video", encoding="utf-8")
+    source = repo.create_source_asset(project["id"], "video", str(video_path))
+    captured: dict[str, object] = {}
+
+    class FakeJobs:
+        def create(self, name, fn, *args, **kwargs):  # type: ignore[no-untyped-def]
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return {"id": "job-1", "name": name, "status": "queued", "progress": 0, "message": "Queued"}
+
+    monkeypatch.setattr(main, "repo", repo)
+    monkeypatch.setattr(main, "jobs", FakeJobs())
+
+    main.create_frame_run(project["id"], FrameRunCreate(source_asset_id=source["id"]))
+
+    assert captured["args"][4] == str(Path(project["root_path"]) / "sources" / source["id"] / "frames")

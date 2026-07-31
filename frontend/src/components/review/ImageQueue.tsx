@@ -9,16 +9,14 @@ type ImageQueueProps = {
   stats: ReviewStats;
   sources: SourceAsset[];
   loading: boolean;
+  prefetching?: boolean;
   onSelectImage: (id: string) => void;
   onFilterChange: (partial: Partial<ImageFilters>) => void;
 };
 
 const REVIEW_STATUS_OPTIONS: Array<{ value: ReviewStatus; label: string }> = [
-  { value: "unreviewed", label: "Unreviewed" },
-  { value: "pending_review", label: "Pending review" },
-  { value: "needs_fix", label: "Needs fix" },
-  { value: "reviewed", label: "Reviewed" },
-  { value: "skipped", label: "Skipped" }
+  { value: "pending_review", label: "Not checked" },
+  { value: "reviewed", label: "Checked" }
 ];
 
 function fileName(path: string): string {
@@ -37,6 +35,7 @@ export function ImageQueue({
   stats,
   sources,
   loading,
+  prefetching = false,
   onSelectImage,
   onFilterChange
 }: ImageQueueProps) {
@@ -45,9 +44,11 @@ export function ImageQueue({
       <div className="sidebar-header">
         <div>
           <strong>Queue</strong>
-          <p className="muted">{images.length} images in the current filter</p>
+          <p className="muted">{images.length} images in the current filter{prefetching ? " · preloading next boxes" : ""}</p>
         </div>
       </div>
+
+      <p className="muted">Checked {stats.reviewed}/{Math.max(1, stats.unreviewed + stats.pending_review + stats.needs_fix + stats.reviewed + stats.skipped)} images ({Math.round((stats.reviewed / Math.max(1, stats.unreviewed + stats.pending_review + stats.needs_fix + stats.reviewed + stats.skipped)) * 100)}%). All labeled images remain trainable.</p>
 
       <div className="review-stats-grid">
         {REVIEW_QUEUE_TILES.map((tile) => (
@@ -59,7 +60,7 @@ export function ImageQueue({
       </div>
 
       <div className="queue-filters">
-        <label>
+        <label title="Review marker only. Split/training uses all images with labels; Checked just tracks how many you already looked at.">
           <span>Status</span>
           <select
             value={filters.review_status ?? ""}
@@ -107,6 +108,7 @@ export function ImageQueue({
 
       <div className="queue-list">
         {loading && <p className="muted">Loading queue...</p>}
+        {prefetching && !loading && <p className="inline-feedback">Preloading next image boxes…</p>}
         {!loading && images.length === 0 && <p className="muted">No images match the current filters.</p>}
         {images.map((image) => (
           <button

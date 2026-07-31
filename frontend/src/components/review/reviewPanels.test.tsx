@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Annotation, ClassItem, ProjectImage } from "../../types";
 import { AnnotationInspector } from "./AnnotationInspector";
 import { AnnotationToolbar } from "./AnnotationToolbar";
+import { ImageQueue } from "./ImageQueue";
 
 const image: ProjectImage = {
   id: "image-1",
@@ -49,11 +50,14 @@ describe("review panels", () => {
         onNext={vi.fn()}
         onSave={vi.fn()}
         onSaveAndNext={vi.fn()}
+        onMergeSameClass={vi.fn()}
       />
     );
 
     expect(html).toContain("Save &amp; next");
-    expect(html).toContain("Shift+S");
+    expect(html).toContain("Ctrl+S");
+    expect(html).toContain("Ctrl+D");
+    expect(html).toContain("confidence score assigned by YOLO-World");
   });
 
   it("shows annotation provenance and edited state in the inspector", () => {
@@ -84,5 +88,24 @@ describe("review panels", () => {
     expect(html).toContain("pseudo");
     expect(html).toContain("Edited");
     expect(html).toContain("Yes");
+  });
+
+  it("shows explicit prefetch feedback while nearby boxes are cached", () => {
+    const html = renderToStaticMarkup(
+      <ImageQueue
+        images={[image]}
+        activeImageId={image.id}
+        filters={{}}
+        stats={{ unreviewed: 0, pending_review: 1, needs_fix: 0, reviewed: 0, skipped: 0, edited: 0, low_confidence: 0 }}
+        sources={[]}
+        loading={false}
+        prefetching={true}
+        onSelectImage={vi.fn()}
+        onFilterChange={vi.fn()}
+      />
+    );
+
+    expect(html).toContain("preloading next boxes");
+    expect(html).toContain("Preloading next image boxes");
   });
 });

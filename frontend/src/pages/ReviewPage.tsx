@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, LoaderCircle } from "lucide-react";
 
 import { api, type ImageFilters, type ReviewStats, type ReviewStatus } from "../api/client";
@@ -55,13 +55,18 @@ export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [baseline, setBaseline] = useState(() => createReviewBaseline([], "reviewed"));
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; ids: string[] } | null>(null);
   const [selectedClassId, setSelectedClassId] = useState<number | null>(null);
   const [mode, setMode] = useState<"select" | "draw" | "pan">("select");
   const [reviewStatus, setReviewStatus] = useState<ReviewStatus>("reviewed");
   const [loadingImages, setLoadingImages] = useState(false);
   const [loadingAnnotations, setLoadingAnnotations] = useState(false);
+  const [prefetching, setPrefetching] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const annotationCache = useRef(new Map<string, { image: ProjectImage; annotations: Annotation[] }>());
+  const imagePreloadCache = useRef(new Set<string>());
   const image = useMemo(() => images.find((item) => item.id === activeImageId) ?? null, [activeImageId, images]);
   const currentIndex = image ? images.findIndex((item) => item.id === image.id) : -1;
   const selectedAnnotation = useMemo(
@@ -141,21 +146,44 @@ export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
       setReviewStatus("reviewed");
       setBaseline(createReviewBaseline([], "reviewed"));
       setSelectedId(null);
+      setSelectedIds([]);
+      setContextMenu(null);
       return;
     }
 
     let ignore = false;
     setLoadingAnnotations(true);
+    setAnnotations([]);
+    setBaseline(createReviewBaseline([], normalizeReviewStatus(image.review_status)));
+    setSelectedId(null);
+    setSelectedIds([]);
+    setContextMenu(null);
     setError(null);
+
+    const cached = annotationCache.current.get(image.id);
+    if (cached) {
+      const nextReviewStatus = normalizeReviewStatus(cached.image.review_status);
+      setAnnotations(cached.annotations);
+      setReviewStatus(nextReviewStatus);
+      setBaseline(createReviewBaseline(cached.annotations, nextReviewStatus));
+      setSelectedId(null);
+      setSelectedIds([]);
+      setContextMenu(null);
+      setLoadingAnnotations(false);
+      return;
+    }
 
     api.annotations(image.id)
       .then((result) => {
         if (ignore) return;
+        annotationCache.current.set(image.id, result);
         const nextReviewStatus = normalizeReviewStatus(result.image.review_status);
         setAnnotations(result.annotations);
         setReviewStatus(nextReviewStatus);
         setBaseline(createReviewBaseline(result.annotations, nextReviewStatus));
         setSelectedId(null);
+        setSelectedIds([]);
+        setContextMenu(null);
       })
       .catch((reason: unknown) => {
         if (ignore) return;
@@ -171,9 +199,38 @@ export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
   }, [image?.id]);
 
   useEffect(() => {
+    if (!images.length || currentIndex < 0) return;
+    let cancelled = false;
+    const candidates = [images[currentIndex + 1], images[currentIndex + 2], images[currentIndex - 1]].filter(Boolean);
+    if (!candidates.length) return;
+    setPrefetching(true);
+    Promise.allSettled(candidates.map(async (candidate) => {
+      if (!annotationCache.current.has(candidate.id)) {
+        const result = await api.annotations(candidate.id);
+        if (!cancelled) annotationCache.current.set(candidate.id, result);
+      }
+      if (!imagePreloadCache.current.has(candidate.path)) {
+        await new Promise<void>((resolve) => {
+          const img = new globalThis.Image();
+          img.onload = () => resolve();
+          img.onerror = () => resolve();
+          img.src = `/api/files?path=${encodeURIComponent(candidate.path)}`;
+        });
+        if (!cancelled) imagePreloadCache.current.add(candidate.path);
+      }
+    })).finally(() => {
+      if (!cancelled) setPrefetching(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentIndex, images]);
+
+  useEffect(() => {
     if (selectedId && !annotations.some((item) => item.id === selectedId)) {
       setSelectedId(null);
     }
+    if (selectedId) setSelectedAnnotations([selectedId]);
   }, [annotations, selectedId]);
 
   useEffect(() => {
@@ -200,6 +257,23 @@ export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
     setAnnotations((current) => annotationReducer(current, action));
   }, []);
 
+  const bulkSelectionIds = selectedIds.length ? selectedIds : selectedId ? [selectedId] : [];
+  function setSelectedAnnotations(ids: string[]) {
+    setSelectedIds(ids);
+    setSelectedId(ids[0] ?? null);
+  }
+  function deleteSelectedAnnotations(ids = bulkSelectionIds) {
+    if (!ids.length) return;
+    setAnnotations((current) => current.filter((item) => !ids.includes(item.id)));
+    setSelectedAnnotations([]);
+    setContextMenu(null);
+  }
+  function changeSelectedClass(classItem: ClassItem, ids = bulkSelectionIds) {
+    if (!ids.length) return;
+    setAnnotations((current) => current.map((item) => ids.includes(item.id) ? { ...item, class_id: classItem.class_id, class_name: classItem.class_name, edited: true } : item));
+    setContextMenu(null);
+  }
+
   const updateAnnotationList = useCallback((nextAnnotations: Annotation[]) => {
     setAnnotations(nextAnnotations);
   }, []);
@@ -207,7 +281,12 @@ export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
   const handleSelect = useCallback(
     (annotationId: string | null) => {
       setSelectedId(annotationId);
-      if (!annotationId) return;
+      setContextMenu(null);
+      if (!annotationId) {
+        setSelectedIds([]);
+        return;
+      }
+      setSelectedIds([annotationId]);
       const annotation = annotations.find((item) => item.id === annotationId);
       if (annotation) setSelectedClassId(annotation.class_id);
     },
@@ -217,16 +296,11 @@ export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
   const handleClassSelect = useCallback(
     (item: ClassItem) => {
       setSelectedClassId(item.class_id);
-      if (selectedId) {
-        applyAnnotationAction({
-          type: "changeClass",
-          id: selectedId,
-          class_id: item.class_id,
-          class_name: item.class_name
-        });
+      if (bulkSelectionIds.length) {
+        changeSelectedClass(item, bulkSelectionIds);
       }
     },
-    [applyAnnotationAction, selectedId]
+    [bulkSelectionIds, changeSelectedClass]
   );
 
   const handleInspectorClassChange = useCallback(
@@ -246,11 +320,22 @@ export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
 
   const handleDelete = useCallback(
     (annotationId: string) => {
-      applyAnnotationAction({ type: "delete", id: annotationId });
-      setSelectedId((current) => (current === annotationId ? null : current));
+      deleteSelectedAnnotations(selectedIds.includes(annotationId) ? selectedIds : [annotationId]);
     },
-    [applyAnnotationAction]
+    [selectedIds]
   );
+
+  const handleMergeSameClass = useCallback(() => {
+    const value = window.prompt("Merge same-class boxes with IoU >=", "0.75");
+    if (value === null) return;
+    const threshold = Number(value);
+    if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+      window.alert("Merge IoU threshold must be a number from 0 to 1.");
+      return;
+    }
+    applyAnnotationAction({ type: "mergeSameClass", iouThreshold: threshold });
+    setSelectedId(null);
+  }, [applyAnnotationAction]);
 
   const persistAnnotations = useCallback(async (advanceToNext = false) => {
     if (!image) return;
@@ -260,6 +345,7 @@ export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
       const nextReviewStatus = normalizeReviewStatus(reviewStatus);
       const nextImageId = advanceToNext ? getNextImageId(images, image.id) : image.id;
       const result = await api.saveAnnotations(image.id, { annotations, review_status: reviewStatus });
+      annotationCache.current.set(image.id, { image: { ...image, review_status: nextReviewStatus }, annotations: result.annotations });
       setAnnotations(result.annotations);
       setReviewStatus(nextReviewStatus);
       setBaseline(createReviewBaseline(result.annotations, nextReviewStatus));
@@ -304,6 +390,17 @@ export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
       if (target instanceof HTMLElement && ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName)) {
         return;
       }
+      const usesShortcutModifier = event.metaKey || event.ctrlKey;
+      if (usesShortcutModifier && (event.key === "s" || event.key === "S")) {
+        event.preventDefault();
+        persistAnnotations().catch(console.error);
+        return;
+      }
+      if (usesShortcutModifier && (event.key === "d" || event.key === "D")) {
+        event.preventDefault();
+        setMode((current) => (current === "draw" ? "select" : "draw"));
+        return;
+      }
       if (event.metaKey || event.ctrlKey || event.altKey) return;
 
       if (event.key === "ArrowLeft") {
@@ -316,9 +413,9 @@ export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
         goNext();
         return;
       }
-      if (event.key === "Delete" && selectedId) {
+      if (event.key === "Delete" && bulkSelectionIds.length) {
         event.preventDefault();
-        handleDelete(selectedId);
+        deleteSelectedAnnotations(bulkSelectionIds);
         return;
       }
       if (event.key === "w" || event.key === "W") {
@@ -351,7 +448,7 @@ export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [classes, goNext, goPrevious, handleClassSelect, handleDelete, persistAnnotations, selectedId]);
+  }, [bulkSelectionIds, classes, deleteSelectedAnnotations, goNext, goPrevious, handleClassSelect, persistAnnotations]);
 
   return (
     <section className="review-page">
@@ -373,6 +470,7 @@ export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
           onSaveAndNext={() => {
             persistAnnotations(true).catch(console.error);
           }}
+          onMergeSameClass={handleMergeSameClass}
         />
 
         {error && (
@@ -393,15 +491,30 @@ export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
             {loadingAnnotations && <LoaderCircle className="spin" size={18} />}
           </div>
           {image ? (
-            <AnnotationCanvas
-              image={image}
-              annotations={annotations}
-              selectedId={selectedId}
-              selectedClass={selectedClass}
-              mode={mode}
-              onChange={updateAnnotationList}
-              onSelect={handleSelect}
-            />
+            <div className={`review-canvas-shell ${loadingAnnotations ? "is-loading" : ""}`}>
+              {loadingAnnotations && <div className="review-loading-overlay"><LoaderCircle className="spin" size={18} />Loading fresh boxes…</div>}
+              <AnnotationCanvas
+                key={image.id}
+                image={image}
+                annotations={annotations}
+                selectedId={selectedId}
+                selectedIds={selectedIds}
+                selectedClass={selectedClass}
+                mode={mode}
+                onChange={updateAnnotationList}
+                onSelect={handleSelect}
+                onSelectMany={setSelectedAnnotations}
+                onContextMenu={(annotationId, point) => setContextMenu({ x: point.x, y: point.y, ids: bulkSelectionIds.includes(annotationId) ? bulkSelectionIds : [annotationId] })}
+              />
+              {contextMenu && contextMenu.ids.length > 0 && (
+                <div className="review-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
+                  <strong>{contextMenu.ids.length} box{contextMenu.ids.length > 1 ? "es" : ""} selected</strong>
+                  <span className="muted">Change class</span>
+                  {classes.map((item) => <button key={item.class_id} type="button" onClick={() => changeSelectedClass(item, contextMenu.ids)}>ID {item.class_id} · {item.class_name}</button>)}
+                  <button type="button" className="danger" onClick={() => deleteSelectedAnnotations(contextMenu.ids)}>Delete selected</button>
+                </div>
+              )}
+            </div>
           ) : (
             <div className="review-empty">
               <strong>No image selected</strong>
@@ -426,6 +539,7 @@ export function ReviewPage({ project, t, onDirtyChange }: ReviewPageProps) {
           stats={stats}
           sources={sources}
           loading={loadingImages}
+          prefetching={prefetching}
           onSelectImage={(id) => {
             if (id === activeImageId) return;
             if (!confirmReviewNavigation()) return;

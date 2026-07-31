@@ -16,8 +16,10 @@ services:
       - ./world_model:/app/world_model:ro
       - ./input_model:/app/input_model:ro
       - ./output_model:/app/output_model
+      - /home/a0665x/Desktop/AI_AGX_WS/autolabel:/home/a0665x/Desktop/AI_AGX_WS/autolabel:rw
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - YOLO_CONFIG_DIR=/tmp/ultralytics
+      - OBJECT_AUTOLABEL_BIND_HOST=${OBJECT_AUTOLABEL_BIND_HOST:-127.0.0.1}
     restart: unless-stopped

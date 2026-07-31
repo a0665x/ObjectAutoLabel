@@ -167,3 +167,61 @@ def test_down_up_recreates_without_build(tmp_path: Path) -> None:
     assert "down" in calls
     assert "up -d --no-build" in calls
     assert "up -d --build" not in calls
+
+
+def test_real_start_rejects_mismatched_platform(tmp_path: Path) -> None:
+    bin_dir, log_path = make_fake_docker(tmp_path, image_exists=True)
+    uname = bin_dir / "uname"
+    uname.write_text("#!/usr/bin/env bash\nprintf 'x86_64\\n'\n", encoding="utf-8")
+    uname.chmod(0o755)
+    env = runtime_env(bin_dir, log_path)
+    env["OBJECT_AUTOLABEL_MODE"] = "jetson"
+
+    result = run_command("./run.sh", "--up", env=env)
+
+    assert result.returncode != 0
+    assert (
+        "Selected platform Jetson / aarch64 does not match host x86_64."
+        in result.stderr
+    )
+
+
+def test_plan_allows_inspecting_non_native_platform(tmp_path: Path) -> None:
+    bin_dir, log_path = make_fake_docker(tmp_path, image_exists=True)
+    uname = bin_dir / "uname"
+    uname.write_text("#!/usr/bin/env bash\nprintf 'x86_64\\n'\n", encoding="utf-8")
+    uname.chmod(0o755)
+
+    result = run_command(
+        "./run.sh",
+        "--plan",
+        "jetson",
+        env=runtime_env(bin_dir, log_path),
+    )
+
+    assert result.returncode == 0
+    assert "docker-compose.jetson.yml" in result.stdout
+
+
+def test_detector_rejects_unknown_output_keys(tmp_path: Path) -> None:
+    fake_detector = tmp_path / "detect-runtime.sh"
+    marker = tmp_path / "injected"
+    fake_detector.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' 'OBJECT_AUTOLABEL_MODE=jetson'\n"
+        "printf '%s\\n' 'OBJECT_AUTOLABEL_ARCH=arm64'\n"
+        f"printf '%s\\n' 'EVIL=$(touch {marker})'\n",
+        encoding="utf-8",
+    )
+    fake_detector.chmod(0o755)
+
+    result = run_command(
+        "./run.sh",
+        "--plan",
+        "jetson",
+        env={"OBJECT_AUTOLABEL_DETECT_SCRIPT": str(fake_detector)},
+    )
+
+    assert result.returncode != 0
+    assert "Unexpected runtime detector key: EVIL" in result.stderr
+    assert not marker.exists()

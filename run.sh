@@ -4,7 +4,7 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARCH="$(uname -m)"
 MODE_FILE="${PROJECT_DIR}/.run-mode"
-DETECT_SCRIPT="${PROJECT_DIR}/scripts/detect-runtime.sh"
+DETECT_SCRIPT="${OBJECT_AUTOLABEL_DETECT_SCRIPT:-${PROJECT_DIR}/scripts/detect-runtime.sh}"
 DEFAULT_MODE="desktop"
 if [[ "${ARCH}" == "aarch64" || "${ARCH}" == "arm64" ]]; then
   DEFAULT_MODE="jetson"
@@ -139,12 +139,102 @@ require_image() {
   fi
 }
 
+load_runtime() {
+  local mode="$1"
+  local key value
+  OBJECT_AUTOLABEL_ARCH=""
+  OBJECT_AUTOLABEL_L4T=""
+  OBJECT_AUTOLABEL_JETPACK=""
+  JETSON_BASE_IMAGE=""
+  COMPOSE_FILE=""
+  while IFS='=' read -r key value; do
+    case "${key}" in
+      OBJECT_AUTOLABEL_MODE) OBJECT_AUTOLABEL_MODE="${value}" ;;
+      OBJECT_AUTOLABEL_ARCH) OBJECT_AUTOLABEL_ARCH="${value}" ;;
+      OBJECT_AUTOLABEL_L4T) OBJECT_AUTOLABEL_L4T="${value}" ;;
+      OBJECT_AUTOLABEL_JETPACK) OBJECT_AUTOLABEL_JETPACK="${value}" ;;
+      JETSON_BASE_IMAGE) JETSON_BASE_IMAGE="${value}" ;;
+      COMPOSE_FILE) COMPOSE_FILE="${value}" ;;
+      "") ;;
+      *)
+        echo "Unexpected runtime detector key: ${key}" >&2
+        return 2
+        ;;
+    esac
+  done < <("${DETECT_SCRIPT}" env "${mode}")
+
+  case "${OBJECT_AUTOLABEL_MODE}" in
+    desktop)
+      if [[ "${COMPOSE_FILE}" != "${PROJECT_DIR}/docker-compose.yml" ]]; then
+        echo "The runtime detector returned an invalid desktop Compose file." >&2
+        return 2
+      fi
+      ;;
+    jetson)
+      if [[ "${COMPOSE_FILE}" != "${PROJECT_DIR}/docker-compose.jetson.yml" ]]; then
+        echo "The runtime detector returned an invalid Jetson Compose file." >&2
+        return 2
+      fi
+      if [[ -z "${JETSON_BASE_IMAGE}" ]]; then
+        echo "The runtime detector did not return a Jetson base image." >&2
+        return 2
+      fi
+      ;;
+    *)
+      echo "The runtime detector returned an invalid mode." >&2
+      return 2
+      ;;
+  esac
+  case "${OBJECT_AUTOLABEL_ARCH}" in
+    amd64|arm64) ;;
+    *)
+      echo "The runtime detector returned an unsupported architecture." >&2
+      return 2
+      ;;
+  esac
+}
+
+platform_label() {
+  case "$1" in
+    desktop) printf '%s\n' "x86_64 / amd64" ;;
+    jetson) printf '%s\n' "Jetson / aarch64" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+validate_platform() {
+  local mode="$1"
+  local matches=0
+  case "${mode}:${ARCH}" in
+    desktop:x86_64|desktop:amd64|jetson:aarch64|jetson:arm64) matches=1 ;;
+  esac
+  if [[ "${matches}" != "1" ]]; then
+    echo "Selected platform $(platform_label "${mode}") does not match host ${ARCH}." >&2
+    return 2
+  fi
+
+  if [[ "${mode}" == "jetson" ]]; then
+    load_runtime "${mode}"
+    if [[ -z "${OBJECT_AUTOLABEL_L4T}" || "${OBJECT_AUTOLABEL_L4T}" == "unknown" ]]; then
+      echo "Jetson startup requires a detected NVIDIA L4T release." >&2
+      return 2
+    fi
+    local runtimes
+    if ! runtimes="$(docker info --format '{{json .Runtimes}}' 2>&1)"; then
+      echo "Docker runtime inspection failed: ${runtimes}" >&2
+      return 2
+    fi
+    if [[ "${runtimes}" != *nvidia* ]]; then
+      echo "Jetson startup requires the NVIDIA Docker runtime." >&2
+      return 2
+    fi
+  fi
+}
+
 compose() {
   local mode="$1"
   shift
-  local runtime_env
-  runtime_env="$("${DETECT_SCRIPT}" env "${mode}")"
-  eval "${runtime_env}"
+  load_runtime "${mode}"
   if [[ "${OBJECT_AUTOLABEL_MODE}" == "jetson" && -z "${OBJECT_AUTOLABEL_BIND_HOST:-}" ]]; then
     OBJECT_AUTOLABEL_BIND_HOST="$(
       python3 -c 'import socket
@@ -195,6 +285,7 @@ first_install() {
     echo "Run ./run.sh --rebuild after source or dependency changes."
     return
   fi
+  validate_platform "${mode}"
   compose "${mode}" up -d --build
   verify_started_runtime "${mode}"
   print_started_urls
@@ -202,9 +293,7 @@ first_install() {
 
 plan() {
   local mode="$1"
-  local runtime_env
-  runtime_env="$("${DETECT_SCRIPT}" env "${mode}")"
-  eval "${runtime_env}"
+  load_runtime "${mode}"
   if [[ "${OBJECT_AUTOLABEL_MODE}" == "jetson" && -z "${OBJECT_AUTOLABEL_BIND_HOST:-}" ]]; then
     OBJECT_AUTOLABEL_BIND_HOST="127.0.0.1"
   fi
@@ -229,6 +318,7 @@ case "${1:-}" in
     ;;
   --up)
     MODE="$(mode_for_command "$1")"
+    validate_platform "${MODE}"
     require_image "${MODE}"
     compose "${MODE}" up -d --no-build
     verify_started_runtime "${MODE}"
@@ -236,6 +326,7 @@ case "${1:-}" in
     ;;
   --rebuild)
     MODE="$(mode_for_command "$1")"
+    validate_platform "${MODE}"
     compose "${MODE}" up -d --build
     verify_started_runtime "${MODE}"
     print_started_urls
@@ -246,6 +337,7 @@ case "${1:-}" in
     ;;
   --down_up)
     MODE="$(mode_for_command "$1")"
+    validate_platform "${MODE}"
     require_image "${MODE}"
     compose "${MODE}" down
     compose "${MODE}" up -d --no-build

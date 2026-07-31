@@ -168,6 +168,7 @@ result = YOLO(model_path).train(
     name="cuda-smoke",
     exist_ok=True,
     plots=False,
+    amp=False,
     verbose=False,
 )
 weights = Path(result.save_dir) / "weights"

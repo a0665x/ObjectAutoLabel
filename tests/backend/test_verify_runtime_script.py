@@ -124,6 +124,7 @@ def test_train_verification_uses_cuda_and_checks_weights(tmp_path: Path) -> None
 
     assert result.returncode == 0
     assert "device=0" in calls
+    assert "amp=False" in calls
     assert "device=\"cpu\"" not in calls
     assert "best.pt: OK" in result.stdout
     assert "last.pt: OK" in result.stdout

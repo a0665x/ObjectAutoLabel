@@ -46,6 +46,12 @@ ObjectAutoLabel is a Dockerized WebUI for object-detection dataset preparation a
   [Testing](TESTING.md).
 - For data path or label-format changes, read [Data Model](DATA_MODEL.md).
 
+## Runtime Lessons
+
+- [Jetson Docker CUDA and YOLO training acceptance](references/lesson-20260731-jetson-docker-cuda-training.md):
+  verified L4T/image lineage, PyTorch CUDA, bounded YOLO training,
+  `MemAvailable`, and the Ultralytics AMP reference-download pitfall.
+
 ## Known Gaps
 
 - The WebUI has a local file browser for mounted paths, but it is still trusted-local tooling, not a browser upload workflow.

@@ -143,6 +143,10 @@ run. It never downloads a model or falls back to CPU. On Jetson it reports
 `/proc/meminfo` `MemAvailable` before and after because CPU and GPU share system
 memory.
 
+The 2026-07-31 AGX Orin hardware evidence, exact image/CUDA versions, training
+output, and AMP reference-download fix are preserved in
+[Jetson Docker CUDA and YOLO training acceptance](references/lesson-20260731-jetson-docker-cuda-training.md).
+
 ## Local Development
 
 The backend can be run without Docker if dependencies are installed:

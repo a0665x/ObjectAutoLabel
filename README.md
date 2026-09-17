@@ -10,25 +10,9 @@ http://127.0.0.1:8501/
 
 ## Interface Preview
 
-### Prompt schema and pseudo labeling
+[![Open the interactive screenshot slideshow](demo_imgs/pseudo_label_page.png)](https://a0665x.github.io/ObjectAutoLabel/)
 
-![Pseudo-label schema editor](demo_imgs/pseudo_label_page.png)
-
-### Dataset confidence map and adaptive object-size distribution
-
-![Review confidence map and adaptive object-size histogram](demo_imgs/review_page1.png)
-
-### Bounding-box review and annotation inspector
-
-![Bounding-box review workspace](demo_imgs/review_page2.png)
-
-### CUDA training and loss monitoring
-
-![Training configuration and loss charts](demo_imgs/training_page.png)
-
-### Model conversion and export
-
-![Model conversion package and Netron preview](demo_imgs/convert_model_page.png)
+[Open slideshow →](https://a0665x.github.io/ObjectAutoLabel/) — browse all five screens in one window with left/right navigation, a slide bar, and playback controls. GitHub README does not support interactive scripts, so the slideshow opens on a separate page.
 
 ## Start
 

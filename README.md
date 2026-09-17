@@ -130,12 +130,74 @@ curl -fsS https://<device>.<tailnet>.ts.net:8501/api/health
 
 ## Data Layout
 
-- `data/projects/<slug>/`: project-owned workspace, copied sources, labels, splits, augmentations, models, conversions, and exports.
-- `data/input/`: reusable raw input media. Project deletion does not remove these files.
-- `data/opendata/visdrone2019-det/`: reusable verified VisDrone cache. `data/opendata/ultralytics/<owner>/<dataset>/` stores compatible Platform Detect caches. Project deletion removes only that project's mapped/sample import.
-- `logs/YYYY-MM-DD/`: daily launcher, runtime, job, and selected access diagnostics.
-- `world_model/`: YOLO-World `.pt`/`.pth` weights for Pseudo. Docker build does not download these weights.
-- `input_model/`: YOLO `.pt`/`.pth` weights for Train.
+The repository includes empty placeholder directories so the required layout is
+visible immediately after cloning. Generated data and model binaries remain
+ignored by Git.
+
+```text
+ObjectAutoLabel/
+├── data/
+│   ├── input/       # reusable source images and videos
+│   ├── opendata/    # downloaded shared Open Data caches
+│   └── projects/    # project workspaces, labels, splits and project artifacts
+├── world_model/     # open-vocabulary checkpoints and prompt encoders
+├── input_model/     # pretrained YOLO checkpoints used to start training
+└── output_model/    # index for trained, converted and exported models
+```
+
+`data/projects/<slug>/` is owned by the application. Project deletion removes
+that project's workspace, but it does not remove reusable files in
+`data/input/` or shared caches in `data/opendata/`. Runtime diagnostics are
+written to `logs/YYYY-MM-DD/`.
+
+### Prepare source data and models
+
+1. Put reusable image folders or videos beneath `data/input/`. For example:
+
+   ```bash
+   mkdir -p data/input/my_dataset
+   cp -r /path/to/images/. data/input/my_dataset/
+   cp /path/to/video.mp4 data/input/
+   ```
+
+2. Install an open-vocabulary model for the Pseudo page. The provided installer
+   downloads checksum-verified checkpoints and matching prompt encoders:
+
+   ```bash
+   # YOLOE-26 Nano Seg + mobileclip2_b.ts + ViT-B-32.pt
+   scripts/install-world-model.sh
+
+   # Optional YOLO-World v2 Small; reuses/installs ViT-B-32.pt
+   scripts/install-world-model.sh yolov8s-worldv2.pt
+   ```
+
+   To use your own approved compatible checkpoint, copy its `.pt` or `.pth`
+   file and required prompt encoder into `world_model/`. Supported filenames
+   include `yoloe-26*-seg.pt`, `yolov8*-worldv2.pt`, and
+   `yolov8*-world.pt`/`.pth`.
+
+3. Copy a native pretrained YOLO detection checkpoint into `input_model/` for
+   the Train page:
+
+   ```bash
+   cp /path/to/yolov8n.pt input_model/
+   ```
+
+   Use a checkpoint supported by the pinned Ultralytics version. Keep model
+   binaries out of Git; `.gitignore` retains only each directory's placeholder.
+
+4. Start or recreate the service. These folders are bind-mounted, so adding a
+   model does not require rebuilding the image:
+
+   ```bash
+   ./run.sh --up
+   # If the service is already open, refresh the browser to reload model lists.
+   ```
+
+Inside Docker, the folders are `/app/data`, `/app/world_model`,
+`/app/input_model`, and `/app/output_model`. `world_model/` and `input_model/`
+are mounted read-only; generated training and conversion artifacts are written
+through the project workspace and indexed from `output_model/`.
 
 ## Optional Google, Facebook, or LINE Sign-in
 
@@ -156,14 +218,14 @@ Register these callback paths with the matching provider:
 ```
 
 When authentication is enabled but no provider is fully configured, the login screen shows setup guidance and protected APIs remain locked. Authentication identifies the operator but does not partition projects by user.
-- `output_model/`: global compatibility/index surface. Project entries are symlinks to `data/projects/<slug>/output_model/`.
 
 Deleting a project package removes its DB rows, jobs, project workspace, and project model-index entry. It does not delete raw `data/input/`.
 
-### Install an open-vocabulary world model
+### World-model integrity and compatibility
 
-Install the checksum-verified default YOLOE-26 Nano Seg checkpoint and prompt
-encoders, or the checksum-verified YOLO-World v2 Small checkpoint:
+The commands shown above install the checksum-verified default YOLOE-26 Nano
+Seg checkpoint and prompt encoders, or the checksum-verified YOLO-World v2
+Small checkpoint:
 
 ```bash
 scripts/install-world-model.sh

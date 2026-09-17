@@ -28,14 +28,26 @@ object_autolabel.db
 *.db
 *.sqlite
 *.sqlite3
-data/
+data/*
+!data/input/
+data/input/**
+!data/input/.gitkeep
+!data/opendata/
+data/opendata/**
+!data/opendata/.gitkeep
+!data/projects/
+data/projects/**
+!data/projects/.gitkeep
 runs/
 logs/
 
 # Model assets are large and should be managed outside git
-world_model/
-input_model/
-output_model/
+world_model/*
+!world_model/.gitkeep
+input_model/*
+!input_model/.gitkeep
+output_model/*
+!output_model/.gitkeep
 *.pt
 *.pth
 *.onnx

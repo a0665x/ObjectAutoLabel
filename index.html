@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ObjectAutoLabel · Interface preview</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #10141e; color: #eef2ff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100svh; display: grid; place-items: center; padding: 24px; }
+    main { width: min(1200px, 100%); }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+    h1 { font-size: clamp(20px, 3vw, 28px); margin: 0; }
+    a { color: #bac7ff; text-underline-offset: 4px; }
+    .viewer { overflow: hidden; border: 1px solid #343e58; border-radius: 18px; background: #191f2d; box-shadow: 0 20px 70px #0005; }
+    .stage { position: relative; aspect-ratio: 16 / 9; background: #0c1019; touch-action: pan-y; }
+    img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    button { border: 1px solid #465578; border-radius: 12px; padding: 10px 16px; font: inherit; color: inherit; background: #2a3450; cursor: pointer; }
+    button:hover { background: #3a4666; }
+    button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid #b7c7ff; outline-offset: 4px; }
+    .arrow { position: absolute; top: 50%; transform: translateY(-50%); padding: 10px 14px; font-size: 28px; background: #12192ce6; }
+    #previous { left: 12px; } #next { right: 12px; }
+    .controls { padding: 18px 22px; }
+    .caption { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 14px; min-height: 24px; }
+    #count { white-space: nowrap; color: #b8c3dc; }
+    input { width: 100%; accent-color: #a7b9ff; cursor: pointer; margin: 0 0 16px; }
+    .actions { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
+    #play { background: linear-gradient(135deg, #5268b8, #7254ac); min-width: 110px; }
+    @media (max-width: 600px) { body { padding: 12px; } header { align-items: start; } header a { font-size: 13px; } .controls { padding: 14px; } .arrow { padding: 4px 10px; } .caption { font-size: 14px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header><h1>ObjectAutoLabel</h1><a href="https://github.com/a0665x/ObjectAutoLabel">View repository</a></header>
+    <section class="viewer" aria-label="Interface screenshot slideshow" aria-roledescription="carousel">
+      <div class="stage" id="stage">
+        <img id="slide" src="pseudo_label_page.png" alt="Prompt schema and pseudo labeling" width="1920" height="1080">
+        <button class="arrow" id="previous" aria-label="Previous screenshot">‹</button>
+        <button class="arrow" id="next" aria-label="Next screenshot">›</button>
+      </div>
+      <div class="controls">
+        <div class="caption"><span id="caption">Prompt schema and pseudo labeling</span><span id="count">1 / 5</span></div>
+        <input id="position" type="range" min="1" max="5" value="1" step="1" aria-label="Screenshot position" aria-valuetext="1 of 5: Prompt schema and pseudo labeling">
+        <div class="actions">
+          <button id="back">← Previous</button><button id="play" aria-pressed="false">▶ Play</button><button id="forward">Next →</button>
+        </div>
+        <p id="announcement" role="status" style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)"></p>
+      </div>
+    </section>
+    <noscript><p>Enable JavaScript to switch screenshots, or <a href="https://github.com/a0665x/ObjectAutoLabel/tree/main/demo_imgs">browse the image files</a>.</p></noscript>
+  </main>
+  <script>
+    const slides = [
+      ['pseudo_label_page.png', 'Prompt schema and pseudo labeling'],
+      ['review_page1.png', 'Dataset confidence map and adaptive object-size distribution'],
+      ['review_page2.png', 'Bounding-box review and annotation inspector'],
+      ['training_page.png', 'CUDA training and loss monitoring'],
+      ['convert_model_page.png', 'Model conversion and export']
+    ];
+    const slide = document.getElementById('slide');
+    const position = document.getElementById('position');
+    const play = document.getElementById('play');
+    let current = 0;
+    let timer = null;
+    function show(index, announce = true) {
+      current = (index + slides.length) % slides.length;
+      const [src, title] = slides[current];
+      slide.src = src;
+      slide.alt = title;
+      document.getElementById('caption').textContent = title;
+      document.getElementById('count').textContent = `${current + 1} / ${slides.length}`;
+      position.value = current + 1;
+      position.setAttribute('aria-valuetext', `${current + 1} of ${slides.length}: ${title}`);
+      if (announce) document.getElementById('announcement').textContent = `${current + 1} of ${slides.length}: ${title}`;
+    }
+    function pause() {
+      clearInterval(timer);
+      timer = null;
+      play.textContent = '▶ Play';
+      play.setAttribute('aria-pressed', 'false');
+    }
+    function navigate(delta) { pause(); show(current + delta); }
+    for (const id of ['previous', 'back']) document.getElementById(id).addEventListener('click', () => navigate(-1));
+    for (const id of ['next', 'forward']) document.getElementById(id).addEventListener('click', () => navigate(1));
+    position.addEventListener('input', () => { pause(); show(Number(position.value) - 1); });
+    play.addEventListener('click', () => {
+      if (timer !== null) { pause(); return; }
+      play.textContent = 'Ⅱ Pause';
+      play.setAttribute('aria-pressed', 'true');
+      timer = setInterval(() => show(current + 1, false), 4000);
+    });
+    document.addEventListener('keydown', event => {
+      if (event.target === position || event.altKey || event.ctrlKey || event.metaKey) return;
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        event.preventDefault(); navigate(event.key === 'ArrowLeft' ? -1 : 1);
+      }
+    });
+    document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
+    let startX = null;
+    const stage = document.getElementById('stage');
+    stage.addEventListener('pointerdown', event => { if (event.target === slide && event.isPrimary) startX = event.clientX; });
+    stage.addEventListener('pointerup', event => {
+      if (startX !== null && Math.abs(event.clientX - startX) > 50) navigate(event.clientX < startX ? 1 : -1);
+      startX = null;
+    });
+    stage.addEventListener('pointercancel', () => { startX = null; });
+    for (const [src] of slides) { const image = new Image(); image.src = src; }
+  </script>
+</body>
+</html>

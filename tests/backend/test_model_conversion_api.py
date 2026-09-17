@@ -2,7 +2,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+from fastapi import HTTPException
+from pydantic import ValidationError
+
 from backend.app import main
+from backend.app.conversion_runtime import detect_conversion_capabilities
 from backend.app.config import AppPaths
 from backend.app.db import connect, initialize_schema
 from backend.app.repositories import Repository
@@ -16,6 +21,42 @@ class FakeJobs:
     def create(self, name: str, fn: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
         self.calls.append({"name": name, "fn": fn, "args": args, "kwargs": kwargs})
         return {"id": "job-1", "name": name, "status": "queued", "progress": 0, "message": "Queued"}
+
+
+def test_model_conversion_request_rejects_non_fp32_precision() -> None:
+    with pytest.raises(ValidationError):
+        ModelConversionCreate(
+            schema_id="schema",
+            source_model_path="model.pt",
+            targets=[{"format": "tflite", "precision": "int8"}],
+        )
+
+
+def test_model_conversion_request_rejects_duplicate_targets() -> None:
+    with pytest.raises(ValidationError, match="Duplicate conversion target"):
+        ModelConversionCreate(
+            schema_id="schema",
+            source_model_path="model.pt",
+            targets=[
+                {"format": "onnx", "precision": "fp32"},
+                {"format": "onnx", "precision": "fp32"},
+            ],
+        )
+
+
+def test_model_conversion_request_accepts_litert_nhwc_but_not_onnx_nhwc() -> None:
+    request = ModelConversionCreate(
+        schema_id="schema",
+        source_model_path="model.pt",
+        targets=[{"format": "tflite", "precision": "fp32", "layout": "NHWC"}],
+    )
+    assert request.targets[0].layout == "NHWC"
+    with pytest.raises(ValidationError, match="ONNX conversion uses NCHW layout"):
+        ModelConversionCreate(
+            schema_id="schema",
+            source_model_path="model.pt",
+            targets=[{"format": "onnx", "precision": "fp32", "layout": "NHWC"}],
+        )
 
 
 def make_repo(tmp_path: Path) -> tuple[Repository, dict, dict, dict]:
@@ -52,6 +93,11 @@ def test_create_model_conversion_endpoint_starts_conversion_job(tmp_path: Path, 
     fake_jobs = FakeJobs()
     monkeypatch.setattr(main, "repo", repo)
     monkeypatch.setattr(main, "jobs", fake_jobs)
+    monkeypatch.setattr(
+        main,
+        "detect_conversion_capabilities",
+        lambda: detect_conversion_capabilities("x86_64"),
+    )
 
     response = main.create_model_conversion(
         project["id"],
@@ -66,6 +112,58 @@ def test_create_model_conversion_endpoint_starts_conversion_job(tmp_path: Path, 
     assert response["name"] == "model_conversion"
     assert fake_jobs.calls[0]["name"] == "model_conversion"
     assert fake_jobs.calls[0]["kwargs"]["related_type"] == "model_conversion"
+    assert fake_jobs.calls[0]["kwargs"]["opset"] == 11
+
+
+@pytest.mark.parametrize("opset", [0, 10, 21])
+def test_opset_request_rejects_unsupported_range(opset):
+    with pytest.raises(ValidationError):
+        ModelConversionCreate(schema_id="schema", source_model_path="model.pt", targets=[{"format": "onnx"}], opset=opset)
+
+
+def test_opset_request_preserves_explicit_version():
+    assert ModelConversionCreate(schema_id="schema", source_model_path="model.pt", targets=[{"format": "onnx"}], opset=17).opset == 17
+
+
+def test_conversion_capabilities_endpoint_reports_runtime_architecture(monkeypatch) -> None:
+    expected = detect_conversion_capabilities("aarch64")
+    monkeypatch.setattr(main, "detect_conversion_capabilities", lambda: expected)
+
+    response = main.list_model_conversion_capabilities()
+
+    assert response == expected
+
+
+def test_aarch64_conversion_request_fails_before_job_creation(tmp_path: Path, monkeypatch) -> None:
+    repo, project, training, schema = make_repo(tmp_path)
+    fake_jobs = FakeJobs()
+    monkeypatch.setattr(main, "repo", repo)
+    monkeypatch.setattr(main, "jobs", fake_jobs)
+    monkeypatch.setattr(
+        main,
+        "detect_conversion_capabilities",
+        lambda: detect_conversion_capabilities("aarch64"),
+    )
+
+    with pytest.raises(HTTPException, match="Copy the .pt checkpoint to an x86_64 host") as exc_info:
+        main.create_model_conversion(
+            project["id"],
+            ModelConversionCreate(
+                training_run_id=training["id"],
+                schema_id=schema["id"],
+                targets=[{"format": "onnx", "precision": "fp32"}],
+            ),
+        )
+
+    assert exc_info.value.status_code in {409, 422}
+    assert fake_jobs.calls == []
+
+
+def test_conversion_api_exposes_no_calibration_or_retry_routes() -> None:
+    route_paths = {route.path for route in main.app.routes}
+
+    assert all("calibration" not in path for path in route_paths)
+    assert all("retry" not in path for path in route_paths)
 
 
 def test_model_sources_endpoint_returns_discovered_output_models(tmp_path: Path, monkeypatch) -> None:
@@ -99,6 +197,11 @@ def test_create_model_conversion_endpoint_accepts_direct_source_model_path(tmp_p
     model_path.write_text("pt", encoding="utf-8")
     monkeypatch.setattr(main, "repo", repo)
     monkeypatch.setattr(main, "jobs", fake_jobs)
+    monkeypatch.setattr(
+        main,
+        "detect_conversion_capabilities",
+        lambda: detect_conversion_capabilities("x86_64"),
+    )
 
     response = main.create_model_conversion(
         project["id"],

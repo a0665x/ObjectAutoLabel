@@ -1,6 +1,5 @@
 import json
 from pathlib import Path
-import sys
 
 import pytest
 
@@ -58,13 +57,14 @@ def test_create_model_conversion_package_writes_schema_and_metadata(
         return output
 
     monkeypatch.setattr(project_services, "_export_conversion_artifact", fake_export)
+    monkeypatch.setattr(project_services.platform, "machine", lambda: "x86_64")
 
     conversion = project_services.create_model_conversion_package(
         repo,
         project["id"],
         training["id"],
         schema["id"],
-        targets=[{"format": "onnx", "precision": "fp32"}, {"format": "tflite", "precision": "int8"}],
+        targets=[{"format": "onnx", "precision": "fp32"}, {"format": "tflite", "precision": "fp32"}],
         imgsz=640,
         job_id="job-1",
     )
@@ -75,9 +75,14 @@ def test_create_model_conversion_package_writes_schema_and_metadata(
     assert classes == [{"id": 0, "name": "bolt"}, {"id": 1, "name": "nut"}]
     assert metadata["training_run_id"] == training["id"]
     assert metadata["schema_name"] == "hardware"
+    assert metadata["export_settings"] == {
+        "imgsz": 640,
+        "onnx_opset": 11,
+        "layouts": {"onnx/fp32": "NCHW", "tflite/fp32": "NCHW"},
+    }
     assert [(item["format"], item["precision"]) for item in metadata["artifacts"]] == [
         ("onnx", "fp32"),
-        ("tflite", "int8"),
+        ("tflite", "fp32"),
     ]
     assert conversion["manifest_path"].endswith("metadata.json")
     assert len(conversion["artifacts"]) == 2
@@ -93,6 +98,7 @@ def test_create_model_export_bundle_writes_bundle_manifest(tmp_path: Path, monke
         return output
 
     monkeypatch.setattr(project_services, "_export_conversion_artifact", fake_export)
+    monkeypatch.setattr(project_services.platform, "machine", lambda: "x86_64")
     conversion = project_services.create_model_conversion_package(
         repo,
         project["id"],
@@ -122,6 +128,21 @@ def test_create_model_export_bundle_writes_bundle_manifest(tmp_path: Path, monke
     assert bundle_manifest["files"]["metadata_json"].endswith("metadata.json")
 
 
+def test_failed_opset_export_marks_conversion_failed(tmp_path, monkeypatch):
+    repo, project, training, schema = make_training_context(tmp_path)
+    def fail(source, output, target, imgsz):
+        assert target["opset"] == 17
+        raise RuntimeError("ONNX opset 17 conversion failed: unsupported operator")
+    monkeypatch.setattr(project_services, "_export_conversion_artifact", fail)
+    monkeypatch.setattr(project_services.platform, "machine", lambda: "x86_64")
+    with pytest.raises(RuntimeError, match="ONNX opset 17 conversion failed"):
+        project_services.create_model_conversion_package(repo, project["id"], training["id"], schema["id"],
+            targets=[{"format": "onnx", "precision": "fp32"}], imgsz=64, opset=17, job_id="failed-job")
+    runs = repo.list_model_conversion_runs(project["id"])
+    assert len(runs) == 1 and runs[0]["status"] == "failed"
+    assert not runs[0]["artifacts"]
+
+
 def test_create_model_export_bundle_zip_includes_native_schema_and_completed_artifacts(tmp_path: Path, monkeypatch) -> None:
     repo, project, training, schema = make_training_context(tmp_path)
 
@@ -132,16 +153,25 @@ def test_create_model_export_bundle_zip_includes_native_schema_and_completed_art
         return output
 
     monkeypatch.setattr(project_services, "_export_conversion_artifact", fake_export)
+    monkeypatch.setattr(project_services.platform, "machine", lambda: "x86_64")
     conversion = project_services.create_model_conversion_package(
         repo,
         project["id"],
         training["id"],
         schema["id"],
-        targets=[{"format": "onnx", "precision": "fp32"}, {"format": "tflite", "precision": "fp16"}],
+        targets=[{"format": "onnx", "precision": "fp32"}, {"format": "tflite", "precision": "fp32"}],
         imgsz=640,
         job_id="job-1",
     )
 
+    run_dir = Path(training["output_dir"])
+    (run_dir / "args.yaml").write_text("epochs: 1\n", encoding="utf-8")
+    (run_dir / "results.csv").write_text("epoch,loss\n1,0.1\n", encoding="utf-8")
+    (run_dir / "results.png").write_bytes(b"plot")
+    (run_dir / "secret.env").write_text("private", encoding="utf-8")
+    external = tmp_path / "external.csv"
+    external.write_text("external", encoding="utf-8")
+    (run_dir / "escaped.csv").symlink_to(external)
     bundle, zip_path = project_services.create_model_export_bundle_zip(repo, project["id"], conversion["id"])
 
     import zipfile
@@ -150,42 +180,51 @@ def test_create_model_export_bundle_zip_includes_native_schema_and_completed_art
     assert zip_path.exists()
     with zipfile.ZipFile(zip_path) as archive:
         names = set(archive.namelist())
-    assert {"best.pt", "classes.json", "metadata.json", "bundle.json", "model-onnx-fp32.onnx", "model-tflite-fp16.tflite"}.issubset(names)
+    assert {"training/args.yaml", "training/results/results.csv", "training/results/results.png", "training/run.json"}.issubset(names)
+    assert "training/results/escaped.csv" not in names
+    assert "training/secret.env" not in names
+    assert {"best.pt", "classes.json", "metadata.json", "bundle.json", "model-onnx-fp32.onnx", "model-tflite-fp32.tflite"}.issubset(names)
 
 
-def test_tflite_conversion_fails_fast_when_export_dependencies_are_missing(tmp_path: Path, monkeypatch) -> None:
-    source_model = tmp_path / "best.pt"
-    source_model.write_text("pt", encoding="utf-8")
-    monkeypatch.setattr(project_services, "_missing_tflite_dependencies", lambda: ["tf_keras", "onnx2tf"])
+def test_create_model_conversion_rejects_aarch64_before_storage_or_database_side_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, project, training, schema = make_training_context(tmp_path)
+    conversion_root = Path(project["root_path"]) / "output_model" / "conversions"
+    monkeypatch.setattr(project_services.platform, "machine", lambda: "aarch64")
 
-    try:
-        project_services._export_conversion_artifact(
-            source_model,
-            tmp_path,
-            {"format": "tflite", "precision": "int8"},
+    with pytest.raises(RuntimeError, match="Copy the .pt checkpoint to an x86_64 host"):
+        project_services.create_model_conversion_package(
+            repo,
+            project["id"],
+            training["id"],
+            schema["id"],
+            targets=[{"format": "onnx", "precision": "fp32"}],
             imgsz=640,
+            job_id="job-1",
         )
-    except RuntimeError as exc:
-        assert "TFLite export dependencies are missing" in str(exc)
-        assert "tf_keras" in str(exc)
-    else:
-        raise AssertionError("Expected missing TFLite dependencies to fail before Ultralytics export")
+
+    assert repo.list_model_conversion_runs(project["id"]) == []
+    assert list(conversion_root.glob("conversion-*")) == []
 
 
-def test_tflite_imp_compat_shim_supports_legacy_flatbuffers_numpy_probe(monkeypatch) -> None:
-    monkeypatch.delitem(sys.modules, "imp", raising=False)
+def test_create_model_conversion_rejects_non_fp32_before_storage_side_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, project, training, schema = make_training_context(tmp_path)
+    conversion_root = Path(project["root_path"]) / "output_model" / "conversions"
+    monkeypatch.setattr(project_services.platform, "machine", lambda: "x86_64")
 
-    project_services._install_imp_compat_for_tflite_support()
-    imp_module = sys.modules["imp"]
+    with pytest.raises(ValueError, match="Unsupported conversion target"):
+        project_services.create_model_conversion_package(
+            repo,
+            project["id"],
+            training["id"],
+            schema["id"],
+            targets=[{"format": "tflite", "precision": "int8"}],
+            imgsz=640,
+            job_id="job-1",
+        )
 
-    assert imp_module.find_module("sys") is not None
-    with pytest.raises(ImportError):
-        imp_module.find_module("definitely_missing_object_autolabel_module")
-
-
-def test_disable_ultralytics_autoinstall_sets_environment(monkeypatch) -> None:
-    monkeypatch.delenv("YOLO_AUTOINSTALL", raising=False)
-
-    project_services._disable_ultralytics_autoinstall()
-
-    assert project_services.os.environ["YOLO_AUTOINSTALL"] == "False"
+    assert repo.list_model_conversion_runs(project["id"]) == []
+    assert list(conversion_root.glob("conversion-*")) == []

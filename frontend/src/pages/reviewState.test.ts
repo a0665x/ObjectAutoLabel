@@ -27,18 +27,18 @@ function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation {
 }
 
 describe("reviewState", () => {
-  it("treats matching annotations and review status as clean", () => {
+  it("treats matching annotations as clean", () => {
     const annotations = [makeAnnotation()];
-    const baseline = createReviewBaseline(annotations, "pending_review");
+    const baseline = createReviewBaseline(annotations);
 
-    expect(hasDirtyReviewState(baseline, annotations, "pending_review")).toBe(false);
+    expect(hasDirtyReviewState(baseline, annotations)).toBe(false);
   });
 
-  it("marks status-only changes as dirty", () => {
+  it("marks annotation changes as dirty", () => {
     const annotations = [makeAnnotation()];
-    const baseline = createReviewBaseline(annotations, "pending_review");
+    const baseline = createReviewBaseline(annotations);
 
-    expect(hasDirtyReviewState(baseline, annotations, "reviewed")).toBe(true);
+    expect(hasDirtyReviewState(baseline, [{ ...annotations[0], class_name: "person" }])).toBe(true);
   });
 
   it("skips confirmation when there are no unsaved changes", () => {

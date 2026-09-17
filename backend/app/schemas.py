@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr, model_validator
 
 
 class ProjectCreate(BaseModel):
@@ -45,6 +45,7 @@ class ValidationPreviewRequest(BaseModel):
     schema_id: str | None = None
     image_path: str | None = None
     folder_path: str | None = None
+    sample_count: int = Field(1, ge=1, le=12)
     confidence: float = Field(0.25, ge=0, le=1)
     iou: float = Field(0.7, ge=0, le=1)
 
@@ -90,6 +91,17 @@ class AnnotationSaveRequest(BaseModel):
     review_status: ReviewStatus = "reviewed"
 
 
+class ImageRemovalResult(BaseModel):
+    operation_id: str
+    image_id: str
+    next_image_id: str | None
+
+
+class ImageRestoreResult(BaseModel):
+    image: dict[str, Any]
+    annotations: list[dict[str, Any]]
+
+
 class DatasetSplitCreate(BaseModel):
     name: str = "default"
     train_ratio: float = Field(0.8, gt=0, lt=1)
@@ -97,6 +109,27 @@ class DatasetSplitCreate(BaseModel):
     test_ratio: float = Field(0.1, ge=0, lt=1)
     pseudo_label_run_id: str | None = None
     augmentation_run_id: str | None = None
+    open_data_import_id: str | None = None
+
+
+class OpenDataRequest(BaseModel):
+    dataset_key: str = Field(default="visdrone2019-det", min_length=1, max_length=300)
+    schema_id: str
+    mapping: dict[str, int | None]
+    sample_percentage: int = Field(50, ge=1, le=100)
+    seed: int = 42
+    preview_seed: int | None = None
+    version_name: str | None = Field(None, max_length=120)
+
+
+class OpenDataDownloadRequest(BaseModel):
+    dataset_key: str = Field(default="visdrone2019-det", min_length=1, max_length=300)
+    license_accepted: bool = False
+    api_key: SecretStr | None = Field(default=None, repr=False)
+
+
+class OpenDataInspectRequest(BaseModel):
+    dataset_url: str = Field(min_length=1, max_length=500)
 
 
 class AugmentationRunCreate(BaseModel):
@@ -111,6 +144,8 @@ class AugmentationRunCreate(BaseModel):
     box_motion_blur: float = Field(0, ge=0, le=15)
     rotation: float = Field(0, ge=0, le=30)
     horizontal_flip: bool = False
+    vertical_flip: bool = False
+    mirror_probability: float = Field(1.0, ge=0, le=1)
     copies: int = Field(3, ge=1, le=10)
     skip_augment: bool = False
 
@@ -125,6 +160,8 @@ class AugmentationPreviewRequest(BaseModel):
     box_motion_blur: float = Field(0, ge=0, le=15)
     rotation: float = Field(0, ge=0, le=30)
     horizontal_flip: bool = False
+    vertical_flip: bool = False
+    mirror_probability: float = Field(1.0, ge=0, le=1)
     polarity: int = Field(1, ge=-1, le=1)
     limit: int = Field(3, ge=1, le=12)
 
@@ -138,9 +175,12 @@ class TrainingRunCreate(BaseModel):
     batch: int = Field(16, gt=0)
     device: str = "cuda"
     patience: int = Field(10, gt=0)
-    optimizer: str = "SGD"
+    optimizer: Literal["SGD", "MuSGD", "Adam", "AdamW"] = "SGD"
     lr0: float = Field(0.01, gt=0)
     lrf: float = Field(0.01, gt=0)
+    rect: bool = True
+    amp: bool = True
+    diagnostics: bool = False
 
 
 class ModelExportCreate(BaseModel):
@@ -152,7 +192,14 @@ class ModelExportCreate(BaseModel):
 
 class ModelConversionTarget(BaseModel):
     format: Literal["onnx", "tflite"]
-    precision: Literal["fp32", "fp16", "int8"]
+    precision: Literal["fp32"] = "fp32"
+    layout: Literal["NCHW", "NHWC"] = "NCHW"
+
+    @model_validator(mode="after")
+    def validate_layout(self) -> "ModelConversionTarget":
+        if self.format == "onnx" and self.layout != "NCHW":
+            raise ValueError("ONNX conversion uses NCHW layout")
+        return self
 
 
 class ModelConversionCreate(BaseModel):
@@ -161,6 +208,14 @@ class ModelConversionCreate(BaseModel):
     schema_id: str
     targets: list[ModelConversionTarget] = Field(min_length=1)
     imgsz: int = Field(640, gt=0)
+    opset: int = Field(11, ge=11, le=20)
+
+    @model_validator(mode="after")
+    def reject_duplicate_targets(self) -> "ModelConversionCreate":
+        target_keys = [(target.format, target.precision) for target in self.targets]
+        if len(target_keys) != len(set(target_keys)):
+            raise ValueError("Duplicate conversion target")
+        return self
 
 
 class ModelExportBundleCreate(BaseModel):

@@ -43,6 +43,7 @@ def test_artifact_context_counts_images_pseudo_and_augmentation_versions(tmp_pat
         settings_json='{"blur":3}',
         source_image_count=1,
         created_image_count=3,
+        source_image_ids=[image["id"]],
     )
 
     sys.modules.setdefault("cv2", types.ModuleType("cv2"))
@@ -72,7 +73,16 @@ def test_dataset_split_records_selected_augmentation_version(tmp_path: Path) -> 
     project = repo.create_project(name="Split Chain", description="")
     schema = repo.create_class_schema(project["id"], "schema", [{"class_id": 0, "class_name": "person", "descriptors": ["person"]}])
     pseudo = repo.create_pseudo_label_run_record(project["id"], schema["id"], None, "world.pt", str(tmp_path / "pseudo"), 0.1, 0.7, 1, 1, run_name="Pseudo_0706_v1_hash")
-    augment = repo.create_augmentation_run_record(project["id"], pseudo["id"], "Augment_0706_v1", str(tmp_path / "aug"), "{}", 1, 2)
+    augment = repo.create_augmentation_run_record(
+        project["id"],
+        pseudo["id"],
+        "Augment_0706_v1",
+        str(tmp_path / "aug"),
+        "{}",
+        1,
+        2,
+        source_image_ids=["image-1"],
+    )
 
     split = repo.create_dataset_split_record(
         project_id=project["id"],

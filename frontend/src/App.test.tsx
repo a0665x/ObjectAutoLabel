@@ -1,9 +1,53 @@
+// @vitest-environment jsdom
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import type { ComponentType } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { AugmentationBuildSummary, AugmentationControlPanel, AugmentationEffectModal, AugmentationPreviewCard, ConversionPackageSummary, ConversionTargetMatrix, ExportPackageSummary, FileManagerShortcuts, HelpTooltip, InferencePreviewCard, ModelSourceSelector, ParameterHelp, ProcessingButton, ProjectArtifactContextPanel, ProjectStorageStatusCard, PseudoDependencyGraph, PseudoGenerateFeedbackPanel, SchemaClassMap, SchemaHistorySelector, SchemaTreeEditorPreview, SettingsPage, TrainingInputSummary, TrainingLossChart, TrainingRunSummary, ValidationRandomButton, WorkflowGuide, WorkflowTimeline, ViewportToggle, buildAugmentationDraftStorageKey, buildTaskCenterItems, chooseLatestBuildSelection, datasetSplitLineageLabel, loadAugmentationDraft, parseTrainingMetrics, reconcileLocalPseudoJob, saveAugmentationDraft, shouldRefreshArtifactsAfterSourceProcessing } from "./App";
-import type { AugmentationPreviewSample, FileBrowserShortcut } from "./api/client";
-import type { ClassSchema, TrainingRun } from "./types";
+import * as AppModule from "./App";
+import { AugmentationBuildSummary, AugmentationControlPanel, AugmentationEffectModal, AugmentationPreviewCard, ConversionPackageSummary, ConversionTargetMatrix, DatasetLineageChain, ExportPackageSummary, FileManagerShortcuts, FolderPathField, HelpTooltip, InferencePreviewCard, ModelSourceSelector, ParameterHelp, ProcessingButton, ProjectArtifactContextPanel, ProjectStorageStatusCard, PseudoDependencyGraph, PseudoGenerateFeedbackPanel, SchemaClassMap, SchemaHistorySelector, SchemaTreeEditorPreview, SettingsPage, TaskCenter, TrainingInputSummary, TrainingLossChart, TrainingRunSummary, ValidationRandomButton, WorkflowGuide, WorkflowTimeline, ViewportToggle, buildAugmentationDraftStorageKey, buildTaskCenterItems, chooseLatestBuildSelection, datasetSplitImageCount, datasetSplitLineageLabel, datasetSplitOptionLabel, firstSupportedWorldModel, loadAugmentationDraft, parseTrainingMetrics, reconcileLocalPseudoJob, saveAugmentationDraft, shouldRefreshArtifactsAfterSourceProcessing, supportedWorldModels, worldModelLabel } from "./App";
+import { api, buildDatasetSplitSamplesPath, type AugmentationPreviewSample, type FileBrowserShortcut } from "./api/client";
+import type { ClassSchema, Job, ModelLists, Project, TrainingRun } from "./types";
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  window.localStorage.clear();
+});
+
+describe("worldModelLabel", () => {
+  it("identifies YOLO-World v2 separately from legacy weights", () => {
+    expect(worldModelLabel({
+      name: "yolov8s-worldv2.pt",
+      family: "yolo-world-v2",
+      task: "detect",
+      annotation_output: "bbox",
+      supported: true,
+      reason: null
+    })).toContain("YOLO-World v2 · bbox");
+  });
+});
+
+describe("supportedWorldModels", () => {
+  const details = [
+    { name: "mystery.pt", family: "unknown" as const, task: "unknown" as const, annotation_output: "bbox" as const, supported: false, reason: "Unsupported world model filename" },
+    { name: "yoloe-26n-seg.pt", family: "yoloe-26" as const, task: "segment" as const, annotation_output: "bbox" as const, supported: true, reason: null }
+  ];
+
+  it("selects the first supported model instead of an unsupported file", () => {
+    expect(supportedWorldModels(["mystery.pt", "yoloe-26n-seg.pt"], details)).toEqual(["yoloe-26n-seg.pt"]);
+    expect(firstSupportedWorldModel(["mystery.pt", "yoloe-26n-seg.pt"], details)).toBe("yoloe-26n-seg.pt");
+  });
+
+  it("has no fallback when every local file is unsupported", () => {
+    expect(firstSupportedWorldModel(["mystery.pt"], details)).toBe("");
+  });
+
+  it("keeps legacy model-list responses selectable when capability details are absent", () => {
+    expect(supportedWorldModels(["yolov8s-world.pt"], [])).toEqual(["yolov8s-world.pt"]);
+    expect(firstSupportedWorldModel(["yolov8s-world.pt"], [])).toBe("yolov8s-world.pt");
+  });
+});
 
 describe("AugmentationPreviewCard", () => {
   it("renders the augmented preview image with bbox overlay labels", () => {
@@ -30,7 +74,7 @@ describe("AugmentationPreviewCard", () => {
 });
 
 describe("FileManagerShortcuts", () => {
-  it("renders common local data shortcuts with counts and disabled missing paths", () => {
+  it("renders common local data shortcuts without noisy matching-file counts", () => {
     const shortcuts: FileBrowserShortcut[] = [
       { label: "0629 raw data", path: "/home/a0665x/Desktop/AI_AGX_WS/autolabel/0629", exists: true, match_count: 190, description: "Current unlabeled import folder" },
       { label: "Project input/0629", path: "/home/a0665x/Desktop/AI_AGX_WS/autolabel/ObjectAutoLabel/data/input/0629", exists: false, match_count: 0, description: "Copied working input" }
@@ -40,9 +84,19 @@ describe("FileManagerShortcuts", () => {
 
     expect(html).toContain("Common folders");
     expect(html).toContain("0629 raw data");
-    expect(html).toContain("190 matches");
+    expect(html).not.toContain("190 matches");
     expect(html).toContain("Project input/0629");
     expect(html).toContain("missing");
+  });
+});
+
+describe("FolderPathField", () => {
+  it("shows an explicit unassigned state instead of a path-like default", () => {
+    const html = renderToStaticMarkup(<FolderPathField value="" onChange={() => undefined} onBrowse={() => undefined} />);
+
+    expect(html).toContain("No folder selected");
+    expect(html).toContain("Browse folder");
+    expect(html).not.toContain("/home/...");
   });
 });
 
@@ -124,6 +178,24 @@ describe("SchemaTreeEditorPreview", () => {
 });
 
 describe("ProcessingButton", () => {
+  it("keeps the intrinsic action hook in idle and busy states", () => {
+    const { rerender } = render(
+      <ProcessingButton busy={false} className="primary action-process">Train</ProcessingButton>
+    );
+    const idleButton = screen.getByRole("button", { name: "Train" });
+    expect(idleButton.classList.contains("processing-button")).toBe(true);
+    expect(idleButton.classList.contains("action-process")).toBe(true);
+    expect(idleButton.classList.contains("intrinsic-action")).toBe(true);
+
+    rerender(
+      <ProcessingButton busy progress={35} statusText="Epoch 1/1" className="primary action-process">Train</ProcessingButton>
+    );
+    const busyButton = screen.getByRole("button", { name: /Epoch 1\/1/ });
+    expect(busyButton.classList.contains("processing-button")).toBe(true);
+    expect(busyButton.classList.contains("action-process")).toBe(true);
+    expect(busyButton.classList.contains("intrinsic-action")).toBe(true);
+  });
+
   it("renders disabled busy feedback to prevent repeated submits", () => {
     const html = renderToStaticMarkup(<ProcessingButton busy={true}>Run</ProcessingButton>);
 
@@ -139,6 +211,17 @@ describe("ProcessingButton", () => {
     expect(html).toContain("42%");
     expect(html).toContain("processing-meter");
     expect(html).toContain("width:42%");
+  });
+
+  it("turns a running job button into a safe stop action", async () => {
+    const cancel = vi.spyOn(api, "cancelJob").mockResolvedValue({ id: "job-1", name: "training", status: "cancel_requested", progress: 42, message: "Stopping safely…" });
+    render(<ProcessingButton busy jobId="job-1" progress={42}>Train</ProcessingButton>);
+
+    const stop = screen.getByRole("button", { name: /Stop safely/ });
+    expect(stop.getAttribute("type")).toBe("button");
+    fireEvent.click(stop);
+
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith("job-1"));
   });
 });
 
@@ -163,6 +246,38 @@ describe("task state coordination", () => {
 
   it("refreshes project artifacts immediately after source processing changes the source inventory", () => {
     expect(shouldRefreshArtifactsAfterSourceProcessing({ sourceId: "source-1", imageCount: 12 })).toBe(true);
+  });
+
+  it("lets the collapsed Task Center move without turning the drag into an expand click", () => {
+    Object.defineProperty(window, "PointerEvent", { configurable: true, writable: true, value: MouseEvent });
+    render(<TaskCenter jobs={[{ id: "job-1", project_id: "project-1", name: "dataset_split", status: "completed", progress: 100, message: "Completed" }]} clientTasks={[]} activeProjectId="project-1" onJobsChange={() => undefined} />);
+    const panel = screen.getByLabelText("Task center");
+    Object.defineProperty(panel, "getBoundingClientRect", { value: () => ({ left: 600, top: 500, width: 270, height: 46, right: 870, bottom: 546, x: 600, y: 500, toJSON: () => ({}) }) });
+    const handle = screen.getByRole("button", { name: /Task Center/i });
+
+    fireEvent.pointerDown(handle, { button: 0, pointerId: 1, clientX: 700, clientY: 520 });
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 620, clientY: 430 });
+    fireEvent.pointerUp(window, { pointerId: 1, clientX: 620, clientY: 430 });
+    fireEvent.click(handle);
+
+    expect(panel.style.left).toBe("520px");
+    expect(panel.style.top).toBe("410px");
+    expect(handle.getAttribute("aria-expanded")).toBe("false");
+    expect(window.localStorage.getItem("object-autolabel.task-center-position")).toContain("520");
+  });
+
+  it("docks Stream Demo tasks without applying or changing the saved floating position", () => {
+    const saved = JSON.stringify({ left: 520, top: 410 });
+    window.localStorage.setItem("object-autolabel.task-center-position", saved);
+    render(<TaskCenter docked jobs={[{ id: "job-1", project_id: "project-1", name: "dataset_split", status: "completed", progress: 100, message: "Completed" }]} clientTasks={[]} activeProjectId="project-1" onJobsChange={() => undefined} />);
+    const panel = screen.getByLabelText("Task center");
+    const handle = screen.getByRole("button", { name: /Task Center/i });
+    expect(panel.classList.contains("is-docked")).toBe(true);
+    expect(panel.style.left).toBe("");
+    fireEvent.keyDown(handle, { altKey: true, key: "ArrowLeft" });
+    fireEvent.click(handle);
+    expect(handle.getAttribute("aria-expanded")).toBe("true");
+    expect(window.localStorage.getItem("object-autolabel.task-center-position")).toBe(saved);
   });
 });
 
@@ -282,6 +397,8 @@ describe("AugmentationControlPanel", () => {
     expect(html).toContain("x5");
     expect(html).toContain("is-active");
     expect(html).toContain("Skip augment");
+    expect(html).toContain("+ Mirror");
+    expect(html).not.toContain("Mirror directions");
   });
 
   it("renders skip augment as the selected source-build mode", () => {
@@ -315,12 +432,27 @@ describe("AugmentationControlPanel", () => {
     expect(html).not.toContain("模糊");
     expect(html).not.toContain("降低影像");
   });
+
+  it("renders mirror as a normal stacked effect with direction and probability", () => {
+    const html = renderToStaticMarkup(
+      <AugmentationControlPanel
+        settings={{ effects: [{ id: "mirror-1", key: "mirror", value: 0, direction: "vertical", probability: 35 }], copies: 3, skip: false }}
+        onChange={() => undefined}
+        onEditEffect={() => undefined}
+      />
+    );
+
+    expect(html).toContain("Mirror");
+    expect(html).toContain("Top ↔ Bottom");
+    expect(html).toContain("35%");
+  });
 });
 
 describe("dataset build lineage helpers", () => {
   const pseudo = { id: "pseudo-1", run_name: "Pseudo_20260707_v001", schema_name: "person-car", image_count: 10, labeled_count: 8, created_at: "2026-07-07T03:00:00Z" };
   const augment = { id: "aug-1", pseudo_label_run_id: "pseudo-1", name: "Skip source build", source_image_count: 8, created_image_count: 8, output_dir: "/app/data/projects/demo/augmentations/skip", created_at: "2026-07-07T03:10:00Z" };
-  const split = { id: "split-1", name: "default", pseudo_label_run_id: "pseudo-1", augmentation_run_id: "aug-1", train_ratio: 0.8, val_ratio: 0.1, test_ratio: 0.1, dataset_yaml_path: "/app/data/projects/demo/splits/default/dataset.yaml", created_at: "2026-07-07T03:20:00Z" };
+  const split = { id: "split-1", name: "Split_20260707_112000", pseudo_label_run_id: "pseudo-1", augmentation_run_id: "aug-1", open_data_import_id: "open-1", image_ids_json: JSON.stringify({ train: ["1", "2", "3", "4", "5", "6"], valid: ["7"], test: ["8"] }), train_ratio: 0.8, val_ratio: 0.1, test_ratio: 0.1, dataset_yaml_path: "/app/data/projects/demo/splits/default/dataset.yaml", created_at: "2026-07-07T03:20:00Z" };
+  const openData = { id: "open-1", project_id: "project-1", dataset_key: "visdrone2019-det" as const, schema_id: "schema-1", mapping: {}, sample_percentage: 50, selected_image_count: 3, selected_annotation_count: 12, status: "active", created_at: "2026-07-07T03:15:00Z" };
 
   it("summarizes an augmentation build with source and generated counts", () => {
     const html = renderToStaticMarkup(<AugmentationBuildSummary run={augment} pseudoRuns={[pseudo]} />);
@@ -332,15 +464,188 @@ describe("dataset build lineage helpers", () => {
     expect(html).toContain("/app/data/projects/demo/augmentations/skip");
   });
 
-  it("labels split and train inputs with pseudo and augment build lineage", () => {
-    expect(datasetSplitLineageLabel(split, [pseudo], [augment])).toContain("Pseudo_20260707_v001");
-    expect(datasetSplitLineageLabel(split, [pseudo], [augment])).toContain("Skip source build");
+  it("keeps outdated augmentation and split history visible with a user-facing reason and rebuild guidance", () => {
+    const reason = JSON.stringify({ code: "project_image_removed", image_ids: ["image-uuid-1"] });
+    const augmentationHtml = renderToStaticMarkup(
+      <AugmentationBuildSummary run={{ ...augment, outdated: true, outdated_reason: reason }} pseudoRuns={[pseudo]} />
+    );
+    const splitHtml = renderToStaticMarkup(
+      <TrainingInputSummary split={{ ...split, outdated: true, outdated_reason: reason }} pseudoRuns={[pseudo]} augmentationRuns={[augment]} />
+    );
 
-    const html = renderToStaticMarkup(<TrainingInputSummary split={split} pseudoRuns={[pseudo]} augmentationRuns={[augment]} />);
+    expect(augmentationHtml).toContain("Outdated");
+    expect(augmentationHtml).toMatch(/project image was removed/i);
+    expect(augmentationHtml).not.toContain("project_image_removed");
+    expect(augmentationHtml).not.toContain("image-uuid-1");
+    expect(augmentationHtml).toMatch(/rebuild.*Augment.*Split/i);
+    expect(splitHtml).toContain("Outdated");
+    expect(splitHtml).toMatch(/project image was removed/i);
+    expect(splitHtml).not.toContain("project_image_removed");
+    expect(splitHtml).toMatch(/rebuild.*Split/i);
+  });
+
+  it("keeps outdated splits visible but prevents Train submission", async () => {
+    type TrainPageProps = {
+      project: Project;
+      models: ModelLists;
+      jobs: Job[];
+      refreshJobs: () => Promise<void>;
+      t: (key: string) => string;
+      artifactRevision: number;
+    };
+    const TrainPage = (AppModule as unknown as { TrainPage?: ComponentType<TrainPageProps> }).TrainPage;
+    expect(typeof TrainPage).toBe("function");
+    if (!TrainPage) return;
+
+    const outdatedSplit = {
+      ...split,
+      outdated: true,
+      outdated_reason: "Project image removal removal-1 invalidated this split."
+    };
+    vi.spyOn(api, "datasetSplits").mockResolvedValue([outdatedSplit]);
+    vi.spyOn(api, "pseudoLabelRuns").mockResolvedValue([pseudo]);
+    vi.spyOn(api, "augmentationRuns").mockResolvedValue([augment]);
+    vi.spyOn(api, "trainingRuns").mockResolvedValue([]);
+    vi.spyOn(api, "activeOpenDataImport").mockResolvedValue(null);
+    vi.spyOn(api, "openDataImports").mockResolvedValue([]);
+    const train = vi.spyOn(api, "train").mockResolvedValue({ id: "job-1", name: "training", status: "queued", progress: 0, message: "queued" });
+    const models: ModelLists = { world_models: [], world_model_details: [], input_models: ["yolov8n.pt"], output_models: [] };
+    const testProject: Project = { id: "project-1", name: "demo", description: "", root_path: "/tmp/demo" };
+    const { container } = render(<TrainPage project={testProject} models={models} jobs={[]} refreshJobs={async () => undefined} t={(key) => key} artifactRevision={0} />);
+
+    expect(await screen.findByText(/Build a new Split version before training/i)).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /Outdated — rebuild required/i })).toBeNull();
+    fireEvent.submit(container.querySelector("form") as HTMLFormElement);
+    await waitFor(() => expect(train).not.toHaveBeenCalled());
+  });
+
+  it("offers MuSGD in the explicit optimizer order and submits it unchanged", async () => {
+    type TrainPageProps = {
+      project: Project;
+      models: ModelLists;
+      jobs: Job[];
+      refreshJobs: () => Promise<void>;
+      t: (key: string) => string;
+      artifactRevision: number;
+    };
+    const TrainPage = (AppModule as unknown as { TrainPage?: ComponentType<TrainPageProps> }).TrainPage;
+    expect(typeof TrainPage).toBe("function");
+    if (!TrainPage) return;
+
+    vi.spyOn(api, "datasetSplits").mockResolvedValue([split]);
+    vi.spyOn(api, "pseudoLabelRuns").mockResolvedValue([pseudo]);
+    vi.spyOn(api, "augmentationRuns").mockResolvedValue([augment]);
+    vi.spyOn(api, "trainingRuns").mockResolvedValue([]);
+    vi.spyOn(api, "activeOpenDataImport").mockResolvedValue(openData);
+    vi.spyOn(api, "openDataImports").mockResolvedValue([openData]);
+    const train = vi.spyOn(api, "train").mockResolvedValue({ id: "job-1", name: "training", status: "queued", progress: 0, message: "queued" });
+    const models: ModelLists = { world_models: [], world_model_details: [], input_models: ["yolov8n.pt", "yolo11n.pt"], output_models: [] };
+    const testProject: Project = { id: "project-1", name: "demo", description: "", root_path: "/tmp/demo" };
+    const { container, rerender } = render(<TrainPage project={testProject} models={models} jobs={[]} refreshJobs={async () => undefined} t={(key) => key} artifactRevision={0} />);
+
+    const optimizer = await screen.findByLabelText("Optimizer") as HTMLSelectElement;
+    const today = new Date();
+    const mmdd = `${String(today.getMonth() + 1).padStart(2, "0")}${String(today.getDate()).padStart(2, "0")}`;
+    expect((screen.getByLabelText("Training run name") as HTMLInputElement).value).toBe(`Train_${mmdd}_v001`);
+    fireEvent.change(screen.getByLabelText("Input model"), { target: { value: "yolo11n.pt" } });
+    expect(Array.from(optimizer.options).map((option) => option.text)).toEqual(["SGD", "MuSGD", "Adam", "AdamW"]);
+    fireEvent.change(optimizer, { target: { value: "MuSGD" } });
+    await waitFor(() => expect((container.querySelector('select[name="optimizer"]') as HTMLSelectElement).value).toBe("MuSGD"));
+    fireEvent.submit(container.querySelector("form") as HTMLFormElement);
+
+    await waitFor(() => expect(train).toHaveBeenCalled());
+    expect(train.mock.calls[0]?.[1]).toMatchObject({ input_model: "yolo11n.pt", optimizer: "MuSGD" });
+    rerender(<TrainPage project={testProject} models={{ ...models, input_models: [...models.input_models] }} jobs={[{ id: "job-1", name: "training", status: "running", progress: 5, message: "Training started", project_id: testProject.id }]} refreshJobs={async () => undefined} t={(key) => key} artifactRevision={1} />);
+    await waitFor(() => expect((screen.getByLabelText("Input model") as HTMLSelectElement).value).toBe("yolo11n.pt"));
+    expect((screen.getByLabelText("Optimizer") as HTMLSelectElement).value).toBe("MuSGD");
+    expect(screen.getByLabelText("Submitted training configuration").textContent).toMatch(/yolo11n\.pt.*MuSGD/s);
+    expect(screen.queryByText("100 epochs")).toBeNull();
+    expect(screen.queryByText("SGD / 0.01")).toBeNull();
+  });
+
+  it("includes an explicit seed when requesting random Split samples", () => {
+    expect(buildDatasetSplitSamplesPath("project-1", "split-1", 4, 123)).toBe("/api/projects/project-1/dataset-splits/split-1/samples?limit_per_bucket=4&sample_seed=123");
+  });
+
+  it("confirms history deletion and refreshes after the cascade completes", async () => {
+    const HistoryDeleteButton = (AppModule as unknown as {
+      HistoryDeleteButton?: ComponentType<{
+        projectId: string;
+        artifactType: "training";
+        artifactId: string;
+        label: string;
+        onDeleted: () => Promise<void>;
+      }>;
+    }).HistoryDeleteButton;
+    expect(typeof HistoryDeleteButton).toBe("function");
+    if (!HistoryDeleteButton) return;
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const deleteHistory = vi.spyOn(api as unknown as { deleteHistory: (...args: unknown[]) => Promise<unknown> }, "deleteHistory")
+      .mockResolvedValue({ deleted: { training: 1, conversion: 1, export: 1 }, removed_paths: [] });
+    const onDeleted = vi.fn().mockResolvedValue(undefined);
+
+    render(<HistoryDeleteButton projectId="project-1" artifactType="training" artifactId="train-1" label="detector-v1" onDeleted={onDeleted} />);
+    fireEvent.click(screen.getByRole("button", { name: "Delete training history detector-v1" }));
+
+    await waitFor(() => expect(deleteHistory).toHaveBeenCalledWith("project-1", "training", "train-1"));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringMatching(/downstream Conversion and Export/i));
+    await waitFor(() => expect(onDeleted).toHaveBeenCalled());
+  });
+
+  it("keeps outdated augmentation history visible but prevents Split from using it", async () => {
+    type SplitPageProps = {
+      project: Project;
+      jobs: Job[];
+      refreshJobs: () => Promise<void>;
+      t: (key: string) => string;
+      artifactRevision: number;
+    };
+    const SplitPage = (AppModule as unknown as { SplitPage?: ComponentType<SplitPageProps> }).SplitPage;
+    expect(typeof SplitPage).toBe("function");
+    if (!SplitPage) return;
+
+    const staleAugment = {
+      ...augment,
+      outdated: true,
+      outdated_reason: JSON.stringify({ code: "project_image_removed", image_ids: ["image-1"] })
+    };
+    vi.spyOn(api, "pseudoLabelRuns").mockResolvedValue([pseudo]);
+    vi.spyOn(api, "augmentationRuns").mockResolvedValue([staleAugment]);
+    vi.spyOn(api, "datasetSplits").mockResolvedValue([]);
+    vi.spyOn(api, "activeOpenDataImport").mockResolvedValue(null);
+    vi.spyOn(api, "openDataImports").mockResolvedValue([]);
+    const splitRequest = vi.spyOn(api, "split").mockResolvedValue({ id: "job-split", name: "dataset_split", status: "queued", progress: 0, message: "queued" });
+    const testProject: Project = { id: "project-1", name: "demo", description: "", root_path: "/tmp/demo" };
+    const { container } = render(<SplitPage project={testProject} jobs={[]} refreshJobs={async () => undefined} t={(key) => key} artifactRevision={0} />);
+
+    const sourceSelect = await screen.findByLabelText("Augment version") as HTMLSelectElement;
+    const outdatedOption = screen.getByRole("option", { name: /Outdated — rebuild required/i }) as HTMLOptionElement;
+    expect(outdatedOption.disabled).toBe(true);
+    expect(sourceSelect.value).toBe("");
+
+    fireEvent.change(sourceSelect, { target: { value: staleAugment.id } });
+    expect((screen.getByRole("button", { name: "Build New Split Version" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.submit(container.querySelector("form") as HTMLFormElement);
+
+    await screen.findByRole("alert");
+    expect(screen.getByRole("alert").textContent).toMatch(/outdated.*rebuild Augment/i);
+    expect(splitRequest).not.toHaveBeenCalled();
+  });
+
+  it("labels split and train inputs with pseudo and augment build lineage", () => {
+    expect(datasetSplitImageCount(split)).toBe(8);
+    expect(datasetSplitOptionLabel(split, [pseudo], [augment], openData)).toContain("[Pseudo · Pseudo_20260707_v001]");
+    expect(datasetSplitLineageLabel(split, [pseudo], [augment], openData)).toContain("[Open Data · visdrone2019-det 50% · 3 images]");
+
+    const html = renderToStaticMarkup(<TrainingInputSummary split={split} pseudoRuns={[pseudo]} augmentationRuns={[augment]} openDataImport={openData} />);
     expect(html).toContain("Training input");
-    expect(html).toContain("Split build");
-    expect(html).toContain("Dataset source");
+    expect(html).toContain("lineage-pseudo");
+    expect(html).toContain("lineage-augment");
+    expect(html).toContain("lineage-open-data");
+    expect(html).toContain("lineage-split");
     expect(html).toContain("Skip source build");
+    expect(html).toContain("8 images");
+    expect(renderToStaticMarkup(<DatasetLineageChain split={split} pseudoRun={pseudo} augmentationRun={augment} openDataImport={openData} />)).toContain("5 images");
   });
 
   it("updates downstream build selection to the newest generated augment build after artifact refresh", () => {
@@ -377,6 +682,14 @@ describe("Training run metrics", () => {
     expect(metrics).toHaveLength(2);
     expect(metrics[0].epoch).toBe(1);
     expect(metrics[1].box_loss).toBe(0.9);
+  });
+
+  it("keeps chart points when legacy metrics contain Python NaN values", () => {
+    const metrics = parseTrainingMetrics({ ...run, metrics_json: '[{"epoch":1,"box_loss":1.2,"cls_loss":null,"dfl_loss":0.4,"val/cls_loss":NaN}]' });
+
+    expect(metrics).toHaveLength(1);
+    expect(metrics[0].box_loss).toBe(1.2);
+    expect(metrics[0]["val/cls_loss"]).toBeUndefined();
   });
 
   it("renders three readable loss charts with axis labels, points, and regression trend lines", () => {
@@ -426,6 +739,26 @@ describe("AugmentationEffectModal", () => {
     expect(html).not.toContain("降低影像");
   });
 
+  it("configures mirror direction and trigger probability", () => {
+    const html = renderToStaticMarkup(
+      <AugmentationEffectModal
+        draft={{ id: "mirror-1", key: "mirror", value: 0, direction: "horizontal", probability: 50 }}
+        previewSamples={[]}
+        loading={false}
+        error=""
+        onChange={() => undefined}
+        onApply={() => undefined}
+        onClose={() => undefined}
+      />
+    );
+
+    expect(html).toContain("Configure Mirror");
+    expect(html).toContain("Left ↔ Right");
+    expect(html).toContain("Top ↔ Bottom");
+    expect(html).toContain("Trigger probability");
+    expect(html).toContain("50%");
+  });
+
   it("shows an explicit loading state while the sampled photo is being generated", () => {
     const html = renderToStaticMarkup(
       <AugmentationEffectModal
@@ -465,11 +798,12 @@ describe("augmentation draft persistence", () => {
 
 
 describe("ValidationRandomButton", () => {
-  it("uses an English random sampling label instead of Chinese dice copy", () => {
-    const html = renderToStaticMarkup(<ValidationRandomButton loading={false} onClick={() => undefined} />);
+  it("keeps an editable sample count beside the random action", () => {
+    const html = renderToStaticMarkup(<ValidationRandomButton loading={false} sampleCount={3} onSampleCountChange={() => undefined} onClick={() => undefined} />);
 
     expect(html).toContain("Random sample");
-    expect(html).not.toContain("骰子");
+    expect(html).toContain("Sample count");
+    expect(html).toContain('value="3"');
   });
 });
 
@@ -539,14 +873,80 @@ describe("Model conversion UI helpers", () => {
     expect(html).toContain("nut");
   });
 
-  it("renders ONNX and TFLite precision choices as a conversion matrix", () => {
-    const html = renderToStaticMarkup(<ConversionTargetMatrix selected={["onnx:fp32", "tflite:int8"]} onToggle={() => undefined} />);
+  it("renders exactly the ONNX FP32 and LiteRT FP32 conversion choices", () => {
+    render(<ConversionTargetMatrix selected={["onnx:fp32", "tflite:fp32"]} onToggle={() => undefined} />);
 
-    expect(html).toContain("ONNX");
-    expect(html).toContain("FP32");
-    expect(html).toContain("TFLite");
-    expect(html).toContain("INT8");
-    expect(html).toContain("checked");
+    expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+    expect((screen.getByRole("checkbox", { name: "ONNX FP32" }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole("checkbox", { name: "LiteRT FP32" }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.queryByText("FP16")).toBeNull();
+    expect(screen.queryByText("INT8")).toBeNull();
+  });
+
+  it("loads conversion capabilities and blocks unavailable aarch64 conversion", async () => {
+    type ModelConvertPageProps = { project: Project; jobs: Job[]; refreshJobs: () => Promise<void> };
+    const ModelConvertPage = (AppModule as unknown as { ModelConvertPage?: ComponentType<ModelConvertPageProps> }).ModelConvertPage;
+    expect(typeof ModelConvertPage).toBe("function");
+    if (!ModelConvertPage) return;
+
+    vi.spyOn(api, "modelSources").mockResolvedValue([{
+      id: "source-1",
+      label: "Current project · best.pt",
+      path: "/models/best.pt",
+      relative_path: "best.pt",
+      scope: "current_project",
+      source_type: "training_run",
+      status: "completed",
+      training_run_id: "training-1",
+      project_id: "project-1"
+    }]);
+    vi.spyOn(api, "classSchemas").mockResolvedValue([schema]);
+    vi.spyOn(api, "modelConversions").mockResolvedValue([]);
+    const capabilityApi = api as typeof api & {
+      modelConversionCapabilities?: () => Promise<Array<{
+        format: "onnx" | "tflite";
+        precision: "fp32";
+        architecture: string;
+        exporter: "ultralytics";
+        available: boolean;
+        reason: string | null;
+      }>>;
+    };
+    expect(typeof capabilityApi.modelConversionCapabilities).toBe("function");
+    if (!capabilityApi.modelConversionCapabilities) return;
+    const capabilitySpy = vi.spyOn(capabilityApi, "modelConversionCapabilities").mockResolvedValue([
+      { format: "onnx", precision: "fp32", architecture: "aarch64", exporter: "ultralytics", available: false, reason: "Copy the .pt checkpoint to an x86_64 host and convert it there." },
+      { format: "tflite", precision: "fp32", architecture: "aarch64", exporter: "ultralytics", available: false, reason: "Copy the .pt checkpoint to an x86_64 host and convert it there." }
+    ]);
+
+    render(<ModelConvertPage project={{ id: "project-1", name: "Test", description: "", root_path: "/data/test" }} jobs={[]} refreshJobs={async () => undefined} />);
+
+    expect(await screen.findByText(/Copy the \.pt checkpoint to an x86_64 host/)).toBeTruthy();
+    expect(capabilitySpy).toHaveBeenCalledOnce();
+    expect((screen.getByRole("checkbox", { name: "ONNX FP32" }) as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByRole("checkbox", { name: "LiteRT FP32" }) as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: /Convert package/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("defaults ONNX to opset 11, submits another version and exposes hard failures", async () => {
+    vi.spyOn(api, "modelSources").mockResolvedValue([{ id: "source", label: "YOLO26 best.pt", path: "/models/best.pt", relative_path: "best.pt", scope: "current_project", source_type: "training_run", status: "completed", training_run_id: "train", project_id: "project-1" }]);
+    vi.spyOn(api, "classSchemas").mockResolvedValue([schema]);
+    vi.spyOn(api, "modelConversions").mockResolvedValue([]);
+    vi.spyOn(api, "modelConversionCapabilities").mockResolvedValue([
+      { format: "onnx", precision: "fp32", architecture: "x86_64", exporter: "ultralytics", available: true, reason: null },
+      { format: "tflite", precision: "fp32", architecture: "x86_64", exporter: "ultralytics", available: true, reason: null }
+    ]);
+    const create = vi.spyOn(api, "createModelConversion").mockRejectedValue(new Error("ONNX opset 17 conversion failed: unsupported operator. No fallback opset was used."));
+    render(<AppModule.ModelConvertPage project={{ id: "project-1", name: "Test", description: "", root_path: "/data/test" }} jobs={[]} refreshJobs={async () => undefined} />);
+    const button = screen.getByRole("button", { name: /Convert package/ });
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    expect((screen.getByLabelText("ONNX opset") as HTMLSelectElement).value).toBe("11");
+    fireEvent.change(screen.getByLabelText("ONNX opset"), { target: { value: "17" } });
+    fireEvent.click(button);
+    await waitFor(() => expect(create).toHaveBeenCalledWith("project-1", expect.objectContaining({ opset: 17 })));
+    expect((await screen.findByRole("alert")).textContent).toContain("No fallback opset was used");
+    fireEvent.click(screen.getByRole("checkbox", { name: "ONNX FP32" }));
+    expect((screen.getByLabelText("ONNX opset") as HTMLSelectElement).disabled).toBe(true);
   });
 
   it("summarizes conversion packages and export package contents", () => {
@@ -648,7 +1048,15 @@ describe("SettingsPage", () => {
     const html = renderToStaticMarkup(
       <SettingsPage
         t={(key) => key}
-        models={{ world_models: ["yolov8s-world.pt"], input_models: ["yolov8n.pt"], output_models: ["test-v5/runs/train/weights/best.pt"] }}
+        models={{
+          world_models: ["yoloe-26n-seg.pt", "yolov8s-world.pt"],
+          world_model_details: [
+            { name: "yoloe-26n-seg.pt", family: "yoloe-26", task: "segment", annotation_output: "bbox", supported: true, reason: null },
+            { name: "yolov8s-world.pt", family: "yolo-world", task: "detect", annotation_output: "bbox", supported: true, reason: null }
+          ],
+          input_models: ["yolov8n.pt"],
+          output_models: ["test-v5/runs/train/weights/best.pt"]
+        }}
         activeProject={{ id: "p1", name: "test-v5", description: "", root_path: "/app/data/projects/test-v5" }}
         context={{
           project: { id: "p1", name: "test-v5", description: "", root_path: "/app/data/projects/test-v5" },
@@ -664,6 +1072,11 @@ describe("SettingsPage", () => {
     expect(html).toContain("Runtime deployment");
     expect(html).toContain("Desktop x86_64");
     expect(html).toContain("Jetson ARM64");
+    expect(html).toContain("registered tailnet devices only");
+    expect(html).toContain("./run.sh --tailscale-up");
+    expect(html).not.toContain("Tailscale Funnel");
     expect(html).toContain("/app/data/projects/test-v5");
+    expect(html).toContain("YOLOE-26 · Seg → bbox");
+    expect(html).toContain("YOLO-World · bbox");
   });
 });

@@ -5,7 +5,10 @@ import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Callable
 
+from .job_control import JobCancelled, raise_if_cancelled
 from .repositories import Repository
+from .logging_config import log_job_event
+from .repositories import new_id
 
 
 class JobRunner:
@@ -31,11 +34,15 @@ class JobRunner:
             related_id=related_id,
         )
         job_id = job["id"]
+        log_job_event("job.queued", job_id=job_id, project_id=project_id, job_name=name, related_type=related_type)
 
         def run() -> Any:
-            self.repo.update_job(job_id, status="running", message="Running", progress=1)
             try:
+                raise_if_cancelled(self.repo, job_id)
+                self.repo.update_job(job_id, status="running", message="Running", progress=1)
+                log_job_event("job.running", job_id=job_id, project_id=project_id, job_name=name)
                 result = fn(*args, job_id=job_id, **kwargs)
+                raise_if_cancelled(self.repo, job_id)
                 self.repo.update_job(
                     job_id,
                     status="completed",
@@ -43,13 +50,26 @@ class JobRunner:
                     progress=100,
                     result_json=json.dumps(result),
                 )
+                log_job_event("job.completed", job_id=job_id, project_id=project_id, job_name=name)
                 return result
+            except JobCancelled:
+                self.repo.mark_job_related_cancelled(job_id)
+                self.repo.update_job(
+                    job_id,
+                    status="cancelled",
+                    message="Cancelled by user",
+                    error=None,
+                )
+                log_job_event("job.cancelled", job_id=job_id, project_id=project_id, job_name=name)
+                return None
             except Exception as exc:  # noqa: BLE001 - background job errors must be visible in UI.
+                error_id = new_id()[:12]
+                log_job_event("job.failed", job_id=job_id, project_id=project_id, job_name=name, error_id=error_id, error_type=type(exc).__name__, error_message=str(exc), traceback=traceback.format_exc())
                 self.repo.update_job(
                     job_id,
                     status="failed",
-                    message=str(exc),
-                    error=traceback.format_exc(),
+                    message=f"{str(exc)} · error id {error_id}",
+                    error=f"{type(exc).__name__} [error_id={error_id}]: {str(exc)}",
                 )
                 raise
 
@@ -57,6 +77,20 @@ class JobRunner:
         future.add_done_callback(self._consume_exception)
         self._futures[job_id] = future
         return job
+
+    def cancel(self, job_id: str) -> dict[str, Any] | None:
+        job = self.repo.get_job(job_id)
+        if not job:
+            return None
+        if job["status"] in {"completed", "failed", "cancelled"}:
+            return job
+        future = self._futures.get(job_id)
+        if future is not None and future.cancel():
+            self.repo.update_job(job_id, status="cancelled", message="Cancelled by user", error=None)
+        else:
+            self.repo.update_job(job_id, status="cancel_requested", message="Stopping safely…", error=None)
+        log_job_event("job.cancel_requested", job_id=job_id, project_id=job.get("project_id"), job_name=job.get("name"))
+        return self.repo.get_job(job_id)
 
     def wait(self, job_id: str, timeout: float | None = None) -> Any:
         try:

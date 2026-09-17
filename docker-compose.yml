@@ -12,12 +12,31 @@ services:
     volumes:
       - ./data:/app/data
       - ./runs:/app/runs
+      - ./logs:/app/logs
       - ./world_model:/app/world_model:ro
       - ./input_model:/app/input_model:ro
       - ./output_model:/app/output_model
+      - ./cli_workspace:/app/cli_workspace
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - YOLO_CONFIG_DIR=/tmp/ultralytics
+      - OBJECT_AUTOLABEL_CLI_ENABLED=${OBJECT_AUTOLABEL_CLI_ENABLED:-true}
+      - OBJECT_AUTOLABEL_AUTH_ENABLED=${OBJECT_AUTOLABEL_AUTH_ENABLED:-false}
+      - OBJECT_AUTOLABEL_SESSION_SECRET=${OBJECT_AUTOLABEL_SESSION_SECRET:-}
+      - OBJECT_AUTOLABEL_PUBLIC_URL=${OBJECT_AUTOLABEL_PUBLIC_URL:-}
+      - ULTRALYTICS_API_KEY=${ULTRALYTICS_API_KEY:-}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - FACEBOOK_CLIENT_ID=${FACEBOOK_CLIENT_ID:-}
+      - FACEBOOK_CLIENT_SECRET=${FACEBOOK_CLIENT_SECRET:-}
+      - LINE_CLIENT_ID=${LINE_CLIENT_ID:-}
+      - LINE_CLIENT_SECRET=${LINE_CLIENT_SECRET:-}
+    runtime: nvidia
     gpus: all
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

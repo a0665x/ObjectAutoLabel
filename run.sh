@@ -2,9 +2,20 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_DATE="$(TZ=Asia/Taipei date +%F)"
+LOG_TIME="$(TZ=Asia/Taipei date +%H%M%S)"
+LOG_DIR="${PROJECT_DIR}/logs/${LOG_DATE}"
+mkdir -p "${PROJECT_DIR}/logs"
+if command -v setfacl >/dev/null 2>&1 && [[ -O "${PROJECT_DIR}/logs" ]]; then
+  HOST_LOG_USER="$(id -un)"
+  setfacl -m "u:${HOST_LOG_USER}:rwx,d:u:${HOST_LOG_USER}:rwx" "${PROJECT_DIR}/logs" 2>/dev/null || true
+fi
+mkdir -p "${LOG_DIR}"
+exec > >(tee -a "${LOG_DIR}/launcher-${LOG_TIME}.log") 2> >(tee -a "${LOG_DIR}/launcher-${LOG_TIME}.log" >&2)
 ARCH="$(uname -m)"
 MODE_FILE="${PROJECT_DIR}/.run-mode"
 DETECT_SCRIPT="${OBJECT_AUTOLABEL_DETECT_SCRIPT:-${PROJECT_DIR}/scripts/detect-runtime.sh}"
+TAILSCALE_SCRIPT="${OBJECT_AUTOLABEL_TAILSCALE_SCRIPT:-${PROJECT_DIR}/scripts/tailscale-serve.sh}"
 DEFAULT_MODE="desktop"
 if [[ "${ARCH}" == "aarch64" || "${ARCH}" == "arm64" ]]; then
   DEFAULT_MODE="jetson"
@@ -12,7 +23,7 @@ fi
 
 usage() {
   cat <<'USAGE'
-Usage: ./run.sh [--up | --rebuild | --down | --down_up | --logs | --status | --mode MODE | --plan [MODE]]
+Usage: ./run.sh [--up | --rebuild | --down | --down_up | --logs | --status | --mode MODE | --plan [MODE] | --tailscale-up | --tailscale-status | --tailscale-down]
 
 Platforms:
   x86_64 / amd64     Desktop NVIDIA CUDA PyTorch image
@@ -28,6 +39,9 @@ Platforms:
   --mode     Save mode preference, e.g. ./run.sh --mode jetson
   --detect   Print detected runtime environment
   --plan     Print the resolved mode/compose/bind plan without running Docker
+  --tailscale-up      Enable private tailnet-only HTTPS on dedicated port 8501
+  --tailscale-status  Show the private HTTPS route without changing it
+  --tailscale-down    Disable only this app's owned HTTPS route
 USAGE
 }
 
@@ -255,7 +269,24 @@ finally:
     echo "Jetson base image: ${JETSON_BASE_IMAGE}" >&2
     echo "WebUI bind host: ${OBJECT_AUTOLABEL_BIND_HOST:-127.0.0.1}" >&2
   fi
-  docker compose -f "${COMPOSE_FILE}" "$@"
+  local camera_args=()
+  local camera_device="${OBJECT_AUTOLABEL_CAMERA_DEVICE:-/dev/video0}"
+  if [[ ! "${camera_device}" =~ ^/dev/video[0-9]+$ ]]; then
+      echo "OBJECT_AUTOLABEL_CAMERA_DEVICE must be a /dev/videoN device." >&2
+      return 2
+  fi
+  if [[ -n "${OBJECT_AUTOLABEL_CAMERA_DEVICE:-}" && ! -e "${camera_device}" ]]; then
+      echo "Camera device ${OBJECT_AUTOLABEL_CAMERA_DEVICE} does not exist on the host." >&2
+      echo "Run v4l2-ctl --list-devices after connecting the USB webcam." >&2
+      return 2
+  fi
+  if [[ -e "${camera_device}" ]]; then
+    camera_args=(-f "${PROJECT_DIR}/docker-compose.camera.yml")
+    echo "Camera mapping: ${camera_device} -> /dev/video0" >&2
+  else
+    echo "Camera mapping: no ${camera_device} on host; start continues without camera" >&2
+  fi
+  docker compose -f "${COMPOSE_FILE}" "${camera_args[@]}" "$@"
 }
 
 verify_started_runtime() {
@@ -367,6 +398,15 @@ case "${1:-}" in
   --plan)
     MODE="${2:-$(saved_mode)}"
     plan "${MODE}"
+    ;;
+  --tailscale-up)
+    "${TAILSCALE_SCRIPT}" up
+    ;;
+  --tailscale-status)
+    "${TAILSCALE_SCRIPT}" status
+    ;;
+  --tailscale-down)
+    "${TAILSCALE_SCRIPT}" down
     ;;
   -h|--help)
     usage

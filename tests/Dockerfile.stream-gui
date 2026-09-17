@@ -1,0 +1,4 @@
+FROM object-autolabel:latest
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends xvfb xauth libxcb-xinerama0 libxkbcommon-x11-0 \
+    && rm -rf /var/lib/apt/lists/*

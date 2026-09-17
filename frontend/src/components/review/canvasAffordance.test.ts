@@ -8,7 +8,7 @@ describe("canvasAffordance", () => {
     const scale = 200 / 4000;
 
     expect(affordance.handleRadius * scale).toBeCloseTo(7, 5);
-    expect(affordance.strokeWidth * scale).toBeCloseTo(2, 5);
+    expect(affordance.strokeWidth).toBeCloseTo(4, 5);
     expect(affordance.fontSize * scale).toBeCloseTo(12, 5);
   });
 
@@ -17,7 +17,7 @@ describe("canvasAffordance", () => {
     const scale = 1200 / 800;
 
     expect(affordance.handleRadius * scale).toBeCloseTo(7, 5);
-    expect(affordance.strokeWidth * scale).toBeCloseTo(2, 5);
+    expect(affordance.strokeWidth).toBeCloseTo(4, 5);
     expect(affordance.fontSize * scale).toBeCloseTo(12, 5);
   });
 

@@ -6,11 +6,13 @@ import {
   Dice5,
   Download,
   Eye,
+  Film,
   FolderInput,
   FolderOpen,
+  GripHorizontal,
   HelpCircle,
-  Languages,
   LoaderCircle,
+  LogOut,
   PackageCheck,
   Play,
   Scissors,
@@ -18,20 +20,41 @@ import {
   SlidersHorizontal,
   Sparkles,
   SquarePen,
+  StopCircle,
   Trash2,
-  Upload
+  Upload,
+  UserRound
 } from "lucide-react";
 import { api, type AugmentationPreviewSample, type FileBrowserResult, type FileBrowserShortcut, type SourceAnalysis, type SplitSample, type SplitSamples, type ValidationPreviewResult } from "./api/client";
+import { versionedBuildName } from "./artifactNaming";
 import { translate } from "./i18n";
 import { ReviewPage } from "./pages/ReviewPage";
+import { OpenDataPage } from "./pages/OpenDataPage";
+import { StreamDemoPage } from "./pages/StreamDemoPage";
 import { shouldProceedWithReviewExit } from "./pages/reviewState";
-import type { AugmentationRun, ClassSchema, DatasetSplitRun, Job, Language, ModelConversionRun, ModelLists, ModelSource, Project, ProjectArtifactContext, ProjectStorageStatus, PseudoLabelRun, SourceAsset, TrainingMetric, TrainingRun } from "./types";
+import type { AugmentationRun, AuthStatus, ClassSchema, DatasetSplitRun, Job, Language, ModelConversionCapability, ModelConversionRun, ModelConversionTarget, ModelExportBundle, ModelLists, ModelSource, OpenDataImport, Project, ProjectArtifactContext, ProjectStorageStatus, PseudoLabelRun, SourceAsset, TrainingMetric, TrainingRun, WorldModelInfo } from "./types";
 
-type Page = "projects" | "sources" | "schema" | "pseudo" | "review" | "augment" | "split" | "train" | "validate" | "convert" | "export" | "settings";
+type Page = "projects" | "sources" | "schema" | "pseudo" | "review" | "augment" | "open-data" | "split" | "train" | "validate" | "convert" | "export" | "stream-demo" | "settings";
 type ViewportMode = "desktop" | "mobile";
 
 export type ClientTask = { id: string; name: string; status: "running" | "completed"; progress?: number; message?: string; updatedAt: number };
-type TaskCenterItem = { id: string; title: string; status: string; progress?: number; message?: string | null; running: boolean };
+type TaskCenterItem = { id: string; title: string; status: string; progress?: number; message?: string | null; running: boolean; cancellable: boolean };
+
+export function worldModelLabel(info: WorldModelInfo): string {
+  if (info.family === "yoloe-26") return `${info.name} — YOLOE-26 · Seg → bbox`;
+  if (info.family === "yolo-world-v2") return `${info.name} — YOLO-World v2 · bbox`;
+  if (info.family === "yolo-world") return `${info.name} — YOLO-World · bbox`;
+  return `${info.name} — Unsupported${info.reason ? `: ${info.reason}` : ""}`;
+}
+
+export function supportedWorldModels(names: string[], details: WorldModelInfo[]): string[] {
+  if (!details.length) return names;
+  return names.filter((name) => details.find((info) => info.name === name)?.supported === true);
+}
+
+export function firstSupportedWorldModel(names: string[], details: WorldModelInfo[]): string {
+  return supportedWorldModels(names, details)[0] ?? "";
+}
 
 const pages: Array<{ id: Page; icon: React.ComponentType<{ size?: number }>; key: string }> = [
   { id: "projects", icon: Database, key: "projects" },
@@ -39,15 +62,53 @@ const pages: Array<{ id: Page; icon: React.ComponentType<{ size?: number }>; key
   { id: "pseudo", icon: Sparkles, key: "pseudo" },
   { id: "review", icon: SquarePen, key: "review" },
   { id: "augment", icon: SlidersHorizontal, key: "Augment" },
+  { id: "open-data", icon: Download, key: "openData" },
   { id: "split", icon: Scissors, key: "split" },
   { id: "train", icon: Brain, key: "train" },
   { id: "validate", icon: Eye, key: "Validate" },
   { id: "convert", icon: Boxes, key: "convert" },
-  { id: "export", icon: Upload, key: "export" },
+  { id: "stream-demo", icon: Film, key: "Stream Demo" },
   { id: "settings", icon: Settings, key: "settings" }
 ];
 
+const LOGIN_PROVIDER_LABELS: Record<string, string> = {
+  google: "Continue with Google",
+  facebook: "Continue with Facebook",
+  line: "Continue with LINE"
+};
+
+export function LoginScreen({ status }: { status: AuthStatus }) {
+  return (
+    <main className="auth-screen">
+      <section className="auth-card" aria-labelledby="auth-title">
+        <div className="auth-user-mark"><UserRound size={28} aria-hidden="true" /></div>
+        <div>
+          <p className="auth-eyebrow">ObjectAutoLabel</p>
+          <h1 id="auth-title">Sign in to continue</h1>
+          <p className="muted">Choose an identity provider to access this local labeling workspace.</p>
+        </div>
+        {status.providers.length ? (
+          <div className="auth-provider-list">
+            {status.providers.map((provider) => (
+              <a key={provider} className={`auth-provider auth-provider-${provider}`} href={`/api/auth/login/${provider}`}>
+                <UserRound size={18} aria-hidden="true" />
+                <span>{LOGIN_PROVIDER_LABELS[provider] ?? `Continue with ${provider}`}</span>
+              </a>
+            ))}
+          </div>
+        ) : (
+          <div className="auth-setup-message" role="alert">
+            <strong>No login provider is configured.</strong>
+            <span>{status.error ?? "Add at least one provider client ID/secret and restart the service."}</span>
+          </div>
+        )}
+      </section>
+    </main>
+  );
+}
+
 export function App() {
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [language, setLanguage] = useState<Language>("en");
   const [page, setPage] = useState<Page>("projects");
   const [root, setRoot] = useState("");
@@ -57,7 +118,7 @@ export function App() {
   const [viewportMode, setViewportMode] = useState<ViewportMode>("desktop");
   const [jobs, setJobs] = useState<Job[]>([]);
   const [clientTasks, setClientTasks] = useState<ClientTask[]>([]);
-  const [models, setModels] = useState<ModelLists>({ world_models: [], input_models: [], output_models: [] });
+  const [models, setModels] = useState<ModelLists>({ world_models: [], world_model_details: [], input_models: [], output_models: [] });
   const [workflowContext, setWorkflowContext] = useState<ProjectArtifactContext | null>(null);
   const [artifactRevision, setArtifactRevision] = useState(0);
   const observedJobStates = useRef(new Map<string, string>());
@@ -96,12 +157,19 @@ export function App() {
   }
 
   useEffect(() => {
+    api.authStatus()
+      .then(setAuthStatus)
+      .catch((error) => setAuthStatus({ enabled: true, authenticated: false, providers: [], error: error instanceof Error ? error.message : String(error) }));
+  }, []);
+
+  useEffect(() => {
+    if (!authStatus?.authenticated) return;
     refresh().catch(console.error);
     const timer = window.setInterval(() => {
       api.jobs().then(setJobs).catch(console.error);
     }, 1400);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [authStatus?.authenticated]);
 
   useEffect(() => {
     if (!activeProject?.id) {
@@ -135,8 +203,8 @@ export function App() {
       if (!jobBelongsToActiveProject(job, activeProject.id)) continue;
       const previous = observedJobStates.current.get(job.id);
       observedJobStates.current.set(job.id, job.status);
-      if (previous && previous !== job.status && ["completed", "failed"].includes(job.status)) {
-        changedArtifactJob = ["pseudo_label", "augmentation", "dataset_split", "training", "model_conversion", "model_export_bundle", "model_export", "source_analysis", "frame_extraction"].includes(job.name) || changedArtifactJob;
+      if (previous && previous !== job.status && ["completed", "failed", "cancelled"].includes(job.status)) {
+        changedArtifactJob = ["pseudo_label", "augmentation", "open_data_download", "open_data_import", "dataset_split", "training", "model_conversion", "model_export_bundle", "model_export", "source_analysis", "frame_extraction"].includes(job.name) || changedArtifactJob;
       }
     }
     if (changedArtifactJob) {
@@ -173,15 +241,25 @@ export function App() {
     setPage(nextPage);
   };
 
+  if (!authStatus) {
+    return <div className="auth-loading"><LoaderCircle className="spin" size={22} /><span>Checking sign-in…</span></div>;
+  }
+  if (!authStatus.authenticated) {
+    return <LoginScreen status={authStatus} />;
+  }
+
   return (
     <div className={`app-shell viewport-${viewportMode}`}>
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">OA</div>
+          <div className="brand-user-avatar" aria-label={authStatus.user ? `Signed in as ${authStatus.user.name}` : "Local user"}>
+            {authStatus.user?.picture ? <img src={authStatus.user.picture} alt="" referrerPolicy="no-referrer" /> : <UserRound size={22} aria-hidden="true" />}
+          </div>
           <div>
             <strong>ObjectAutoLabel</strong>
-            <span>{t("localFirst")}</span>
+            <span>{authStatus.user?.name ?? t("localFirst")}</span>
           </div>
+          {authStatus.enabled ? <button type="button" className="brand-signout" title="Sign out" aria-label="Sign out" onClick={async () => { await api.logout(); window.location.reload(); }}><LogOut size={17} /></button> : null}
         </div>
         <nav className="nav">
           {pages.map((item) => {
@@ -226,8 +304,8 @@ export function App() {
               ))}
             </select>
             <label className="language-select">
-              <Languages size={17} />
-              <select value={language} onChange={(event) => setLanguage(event.target.value as Language)}>
+              <span>Language</span>
+              <select aria-label="Language" value={language} onChange={(event) => setLanguage(event.target.value as Language)}>
                 <option value="en">EN</option>
                 <option value="zh">中文</option>
                 <option value="ja">日本語</option>
@@ -258,14 +336,16 @@ export function App() {
         {page === "pseudo" && activeProject && <PseudoPage t={t} project={activeProject} models={models} jobs={jobs} refreshJobs={refresh} />}
         {page === "review" && activeProject && <ReviewPage t={t} project={activeProject} onDirtyChange={setReviewDirty} />}
         {page === "augment" && activeProject && <AugmentationPage project={activeProject} jobs={jobs} refreshJobs={refresh} artifactRevision={artifactRevision} />}
+        {page === "open-data" && activeProject && <OpenDataPage project={activeProject} jobs={jobs} refreshJobs={refresh} artifactRevision={artifactRevision} />}
         {page === "split" && activeProject && <SplitPage t={t} project={activeProject} jobs={jobs} refreshJobs={refresh} artifactRevision={artifactRevision} />}
-        {page === "train" && activeProject && <TrainPage project={activeProject} models={models} jobs={jobs} refreshJobs={refresh} t={t} artifactRevision={artifactRevision} />}
+        {page === "train" && activeProject && <TrainPage project={activeProject} models={models} jobs={jobs} refreshJobs={refresh} t={t} artifactRevision={artifactRevision} onGoToSplit={() => navigateToPage("split")} />}
         {page === "validate" && activeProject && <ValidationPage project={activeProject} models={models} artifactRevision={artifactRevision} />}
         {page === "convert" && activeProject && <ModelConvertPage project={activeProject} jobs={jobs} refreshJobs={refresh} />}
-        {page === "export" && activeProject && <ExportPage project={activeProject} jobs={jobs} refreshJobs={refresh} t={t} />}
+
+        {page === "stream-demo" && activeProject && <StreamDemoPage key={activeProject.id} project={activeProject} />}
         {page === "settings" && <SettingsPage t={t} models={models} activeProject={activeProject} context={workflowContext} />}
       </main>
-      <TaskCenter jobs={jobs} clientTasks={clientTasks} activeProjectId={activeProject?.id} />
+      <TaskCenter jobs={jobs} clientTasks={clientTasks} activeProjectId={activeProject?.id} onJobsChange={setJobs} />
     </div>
   );
 }
@@ -316,9 +396,10 @@ function jobBelongsToActiveProject(job: Job, activeProjectId?: string) {
   return jobProjectId(job) === activeProjectId;
 }
 
-export function ProcessingButton({ busy, children, className = "primary", progress, statusText, taskName, disabled = false }: { busy: boolean; children: React.ReactNode; className?: string; progress?: number; statusText?: string; taskName?: string; disabled?: boolean }) {
+export function ProcessingButton({ busy, children, className = "primary", progress, statusText, taskName, disabled = false, jobId }: { busy: boolean; children: React.ReactNode; className?: string; progress?: number; statusText?: string; taskName?: string; disabled?: boolean; jobId?: string }) {
   const cleanProgress = typeof progress === "number" && Number.isFinite(progress) ? Math.max(0, Math.min(100, Math.round(progress))) : undefined;
   const wasBusy = useRef(false);
+  const [cancelling, setCancelling] = useState(false);
   useEffect(() => {
     if (!taskName) {
       wasBusy.current = busy;
@@ -336,9 +417,23 @@ export function ProcessingButton({ busy, children, className = "primary", progre
     wasBusy.current = busy;
   }, [busy, cleanProgress, statusText, taskName]);
   return (
-    <button className={`${className} touch-feedback processing-button ${busy ? "is-processing" : ""}`} disabled={busy || disabled} aria-busy={busy}>
-      {busy ? <LoaderCircle className="spin" size={17} /> : null}
-      <span className="processing-button-label">{busy ? (statusText || "Working…") : children}</span>
+    <button
+      type={busy && jobId ? "button" : "submit"}
+      className={`${className} touch-feedback processing-button intrinsic-action ${busy ? "is-processing" : ""} ${busy && jobId ? "is-cancellable" : ""}`}
+      disabled={busy && jobId ? cancelling : busy || disabled}
+      aria-busy={busy}
+      onClick={busy && jobId ? async (event) => {
+        event.preventDefault();
+        setCancelling(true);
+        try {
+          await api.cancelJob(jobId);
+        } finally {
+          setCancelling(false);
+        }
+      } : undefined}
+    >
+      {busy && jobId ? <StopCircle size={17} /> : busy ? <LoaderCircle className="spin" size={17} /> : null}
+      <span className="processing-button-label">{busy && jobId ? (cancelling ? "Requesting stop…" : "Stop safely") : busy ? (statusText || "Working…") : children}</span>
       {busy && cleanProgress !== undefined ? <span className="processing-percent">{cleanProgress}%</span> : null}
       {busy && cleanProgress !== undefined ? <span className="processing-meter" aria-hidden="true"><span style={{ width: `${cleanProgress}%` }} /></span> : null}
     </button>
@@ -374,7 +469,8 @@ function buildTaskCenterState({ jobs, clientTasks, activeProjectId, expanded }: 
     status: task.status,
     progress: task.progress,
     message: task.message,
-    running: task.status === "running"
+    running: task.status === "running",
+    cancellable: false
   }));
   const jobItems = visibleJobs.map((job) => ({
     id: job.id,
@@ -382,7 +478,8 @@ function buildTaskCenterState({ jobs, clientTasks, activeProjectId, expanded }: 
     status: job.status,
     progress: job.progress,
     message: job.message || job.error,
-    running: isActiveJob(job)
+    running: isActiveJob(job),
+    cancellable: ["queued", "running"].includes(job.status)
   }));
   return {
     items: [...clientItems, ...jobItems],
@@ -394,23 +491,137 @@ export function buildTaskCenterItems(args: { jobs: Job[]; clientTasks: ClientTas
   return buildTaskCenterState(args).items;
 }
 
-function TaskCenter({ jobs, clientTasks, activeProjectId }: { jobs: Job[]; clientTasks: ClientTask[]; activeProjectId?: string }) {
+type TaskCenterPosition = { left: number; top: number };
+const TASK_CENTER_POSITION_KEY = "object-autolabel.task-center-position";
+
+function clampTaskCenterPosition(left: number, top: number, width: number, height: number): TaskCenterPosition {
+  const gutter = 8;
+  return {
+    left: Math.max(gutter, Math.min(left, Math.max(gutter, window.innerWidth - width - gutter))),
+    top: Math.max(gutter, Math.min(top, Math.max(gutter, window.innerHeight - height - gutter)))
+  };
+}
+
+function loadTaskCenterPosition(): TaskCenterPosition | null {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(TASK_CENTER_POSITION_KEY) || "null") as TaskCenterPosition | null;
+    return value && Number.isFinite(value.left) && Number.isFinite(value.top) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export function TaskCenter({ jobs, clientTasks, activeProjectId, onJobsChange, docked = false }: { jobs: Job[]; clientTasks: ClientTask[]; activeProjectId?: string; onJobsChange: (jobs: Job[]) => void; docked?: boolean }) {
   const [expanded, setExpanded] = useState(false);
+  const [position, setPosition] = useState<TaskCenterPosition | null>(() => loadTaskCenterPosition());
+  const [dragging, setDragging] = useState(false);
+  const panelRef = useRef<HTMLElement | null>(null);
+  const dragRef = useRef<{ pointerId: number; x: number; y: number; left: number; top: number; width: number; height: number; moved: boolean } | null>(null);
+  const suppressClickRef = useRef(false);
   const { items, activeCount } = buildTaskCenterState({ jobs, clientTasks, activeProjectId, expanded });
   const hasTasks = items.length > 0;
   useEffect(() => {
     if (activeCount > 0) setExpanded(true);
   }, [activeCount]);
+  useEffect(() => {
+    const keepInsideViewport = () => {
+      const panel = panelRef.current;
+      if (!panel || !position) return;
+      const rect = panel.getBoundingClientRect();
+      const next = clampTaskCenterPosition(position.left, position.top, rect.width, rect.height);
+      if (next.left !== position.left || next.top !== position.top) setPosition(next);
+    };
+    window.addEventListener("resize", keepInsideViewport);
+    return () => window.removeEventListener("resize", keepInsideViewport);
+  }, [position, expanded]);
+  useEffect(() => {
+    if (!dragging) return;
+    const move = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      const dx = event.clientX - drag.x;
+      const dy = event.clientY - drag.y;
+      if (!drag.moved && Math.hypot(dx, dy) < 6) return;
+      drag.moved = true;
+      suppressClickRef.current = true;
+      const next = clampTaskCenterPosition(drag.left + dx, drag.top + dy, drag.width, drag.height);
+      setPosition(next);
+      window.localStorage.setItem(TASK_CENTER_POSITION_KEY, JSON.stringify(next));
+    };
+    const finish = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      dragRef.current = null;
+      setDragging(false);
+      if (drag.moved) window.setTimeout(() => { suppressClickRef.current = false; }, 0);
+    };
+    const cancel = () => { dragRef.current = null; suppressClickRef.current = false; setDragging(false); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", cancel);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", cancel);
+    };
+  }, [dragging]);
+  function persistPosition(next: TaskCenterPosition) {
+    setPosition(next);
+    window.localStorage.setItem(TASK_CENTER_POSITION_KEY, JSON.stringify(next));
+  }
+  function nudgePosition(dx: number, dy: number) {
+    const panel = panelRef.current;
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect();
+    persistPosition(clampTaskCenterPosition(rect.left + dx, rect.top + dy, rect.width, rect.height));
+  }
   if (!hasTasks) return null;
   return (
-    <aside className={`task-center ${expanded ? "is-expanded" : "is-collapsed"}`} aria-label="Task center">
-      <button type="button" className="task-center-header" onClick={() => setExpanded((value) => !value)} title="Click to expand or collapse task details">
+    <aside
+      ref={panelRef}
+      className={`task-center ${expanded ? "is-expanded" : "is-collapsed"}${dragging ? " is-dragging" : ""}${position ? " has-custom-position" : ""}${docked ? " is-docked" : ""}`}
+      aria-label="Task center"
+      style={!docked && position ? { left: position.left, top: position.top, right: "auto", bottom: "auto" } : undefined}
+    >
+      <button
+        type="button"
+        className="task-center-header"
+        aria-expanded={expanded}
+        onPointerDown={(event) => {
+          if (docked || event.button !== 0) return;
+          const rect = panelRef.current?.getBoundingClientRect();
+          if (!rect) return;
+          suppressClickRef.current = false;
+          dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, left: rect.left, top: rect.top, width: rect.width, height: rect.height, moved: false };
+          setDragging(true);
+        }}
+        onKeyDown={(event) => {
+          if (docked || !event.altKey) return;
+          const movement: Record<string, [number, number]> = { ArrowLeft: [-16, 0], ArrowRight: [16, 0], ArrowUp: [0, -16], ArrowDown: [0, 16] };
+          const delta = movement[event.key];
+          if (!delta) return;
+          event.preventDefault();
+          nudgePosition(delta[0], delta[1]);
+        }}
+        onClick={() => {
+          if (suppressClickRef.current) {
+            suppressClickRef.current = false;
+            return;
+          }
+          setExpanded((value) => !value);
+        }}
+        title={docked ? "Expand/collapse tasks" : "Drag to move · Click to expand/collapse · Alt+Arrow to move with keyboard"}
+      >
+        <GripHorizontal className="task-drag-grip" size={16} aria-hidden="true" />
         <span className={`task-pulse ${activeCount ? "is-live" : ""}`} />
         <strong>Task Center</strong>
         <small>{activeCount ? `${activeCount} running` : "latest runs"}</small>
       </button>
       {expanded && <div className="task-center-list">
-        {items.map((item) => <TaskToast key={item.id} title={item.title} status={item.status} progress={item.progress} message={item.message} />)}
+        {items.map((item) => <TaskToast key={item.id} title={item.title} status={item.status} progress={item.progress} message={item.message} cancellable={item.cancellable} onCancel={item.cancellable ? async () => {
+          const updated = await api.cancelJob(item.id);
+          onJobsChange(jobs.map((job) => job.id === updated.id ? updated : job));
+        } : undefined} />)}
       </div>}
     </aside>
   );
@@ -420,7 +631,7 @@ function humanJobName(name: string) {
   return name.split("_").map((part) => part ? `${part[0].toUpperCase()}${part.slice(1)}` : part).join(" ");
 }
 
-function TaskToast({ title, status, progress, message }: { title: string; status: string; progress?: number; message?: string | null }) {
+function TaskToast({ title, status, progress, message, cancellable = false, onCancel }: { title: string; status: string; progress?: number; message?: string | null; cancellable?: boolean; onCancel?: () => Promise<void> }) {
   const cleanProgress = typeof progress === "number" && Number.isFinite(progress) ? Math.max(0, Math.min(100, Math.round(progress))) : undefined;
   const isRunning = !["completed", "failed", "cancelled"].includes(status);
   return (
@@ -433,6 +644,7 @@ function TaskToast({ title, status, progress, message }: { title: string; status
         </div>
       </div>
       {message ? <p>{message}</p> : null}
+      {cancellable && onCancel ? <button type="button" className="task-cancel-button" onClick={() => void onCancel()}><StopCircle size={15} />Stop safely</button> : null}
       {cleanProgress !== undefined ? <div className="task-meter" aria-label={`${title} progress ${cleanProgress}%`}><span style={{ width: `${cleanProgress}%` }} /></div> : null}
     </article>
   );
@@ -447,11 +659,11 @@ const workflowSteps: WorkflowStep[] = [
   { page: "pseudo", name: "Pseudo", jobNames: ["pseudo_label"], hint: "Assign schema, tune prompts, then generate pseudo labels." },
   { page: "review", name: "Review", jobNames: [], hint: "Optional spot-check. All labeled images remain trainable even if review is incomplete.", optional: true },
   { page: "augment", name: "Augment", jobNames: ["augmentation"], hint: "Optional: preview transforms before split.", optional: true },
+  { page: "open-data", name: "Open Data", jobNames: ["open_data_download", "open_data_import"], hint: "Optional: map and sample a supported labeled dataset before Split.", optional: true },
   { page: "split", name: "Split", jobNames: ["dataset_split"], hint: "Build train/validation/test dataset.yaml." },
   { page: "train", name: "Train", jobNames: ["training"], hint: "Select split/model and start training." },
   { page: "validate", name: "Validate", jobNames: ["validation"], hint: "Randomly sample images and inspect model predictions.", optional: true },
-  { page: "convert", name: "Convert", jobNames: ["model_conversion"], hint: "Create ONNX/TFLite packages with schema metadata.", optional: true },
-  { page: "export", name: "Export", jobNames: ["model_export_bundle", "model_export"], hint: "Export a selected conversion package.", optional: true }
+  { page: "convert", name: "Convert / Export", jobNames: ["model_conversion", "model_export_bundle", "model_export"], hint: "Convert models and download packages with training evidence.", optional: true }
 ];
 
 function workflowFactDone(step: WorkflowStep, facts?: WorkflowFacts) {
@@ -710,7 +922,7 @@ function SourcesPage({ project, refresh, refreshArtifacts, t }: { project: Proje
           <button type="button" className={kind === "video" ? "is-active" : ""} onClick={() => setKind("video")}>Video</button>
         </div>
         <p className="muted">Image folder registers jpg/png/jpeg/bmp/webp files. Video accepts mp4/webm/mov/mkv and then exposes frame extraction settings.</p>
-        <div className="field-row"><input value={path} placeholder={kind === "image_folder" ? "/home/.../folder-with-jpg-png" : "/home/.../video.mp4"} onChange={(event) => setPath(event.target.value)} required /><button className="secondary action-browse" type="button" onClick={() => setShowBrowser(true)}><FolderOpen size={16} />Browse</button></div>
+        <FolderPathField value={path} mode={kind} onChange={setPath} onBrowse={() => setShowBrowser(true)} required />
         <ProcessingButton busy={processingSource} progress={sourceProgress} statusText={sourceStep || "Processing source…"} taskName="Source analysis" className="primary action-process"><Play size={17} />Process & analysis</ProcessingButton>
         {processingSource && <p className="inline-feedback">{sourceProgress}% · {sourceStep || "Reading files and calculating counts/sizes…"}</p>}
       </form>
@@ -757,7 +969,6 @@ export function FileManagerShortcuts({ shortcuts, currentPath, onSelect }: { sho
             >
               <strong>{shortcut.label}</strong>
               <span>{shortcut.exists ? shortcut.path : "missing"}</span>
-              <small>{shortcut.exists ? `${shortcut.match_count} matches` : "missing"}</small>
             </button>
           );
         })}
@@ -766,11 +977,36 @@ export function FileManagerShortcuts({ shortcuts, currentPath, onSelect }: { sho
   );
 }
 
-function FileManagerDialog({ mode, initialPath, onSelect, onClose }: { mode: "video" | "image_folder"; initialPath: string; onSelect: (path: string) => void; onClose: () => void }) {
+export function FolderPathField({ value, mode = "image_folder", onChange, onBrowse, required = false }: { value: string; mode?: "video" | "image_folder"; onChange: (path: string) => void; onBrowse: () => void; required?: boolean }) {
+  const empty = !value.trim();
+  return (
+    <div className="folder-path-field">
+      <label>
+        <span>{mode === "image_folder" ? "Selected folder" : "Selected video"}</span>
+        <input
+          value={value}
+          placeholder={mode === "image_folder" ? "No folder selected" : "No video selected"}
+          aria-describedby="folder-path-hint"
+          onChange={(event) => onChange(event.target.value)}
+          required={required}
+        />
+      </label>
+      <button className="secondary action-browse" type="button" onClick={onBrowse}><FolderOpen size={16} />Browse folder</button>
+      <small id="folder-path-hint" className={empty ? "path-assignment-status is-empty" : "path-assignment-status"}>
+        {empty ? "Not assigned yet — browse or enter a path." : "Assigned path"}
+      </small>
+    </div>
+  );
+}
+
+export function FileManagerDialog({ mode, initialPath, onSelect, onClose }: { mode: "video" | "image_folder"; initialPath: string; onSelect: (path: string) => void; onClose: () => void }) {
   const [browser, setBrowser] = useState<FileBrowserResult | null>(null);
+  const [browserError, setBrowserError] = useState("");
   const [path, setPath] = useState(initialPath);
-  useEffect(() => { api.fileBrowser(path, mode).then((result) => { setBrowser(result); if (!path) setPath(result.path); }).catch(console.error); }, [path, mode]);
-  return <div className="modal-backdrop"><div className="file-manager"><div className="sidebar-header"><div><h2>File manager</h2><p className="muted">Choose {mode === "image_folder" ? "a folder containing jpg/png images" : "an mp4/webm/mov video file"} from this device.</p></div><button className="secondary action-neutral" type="button" onClick={onClose}>Close</button></div><FileManagerShortcuts shortcuts={browser?.shortcuts ?? []} currentPath={browser?.path ?? path} onSelect={setPath} /><div className="field-row"><input value={path} onChange={(event) => setPath(event.target.value)} /><button type="button" className="secondary action-browse" onClick={() => api.fileBrowser(path, mode).then((result) => { setBrowser(result); setPath(result.path); })}>Go</button></div>{browser?.parent && <button type="button" className="secondary action-browse" onClick={() => setPath(browser.parent || path)}>.. parent</button>}{mode === "image_folder" && browser && browser.current_match_count > 0 && <button type="button" className="primary action-assign" onClick={() => onSelect(browser.path)}>Use this folder ({browser.current_match_count} images)</button>}<div className="file-list">{browser?.entries.map((entry) => <button key={entry.path} type="button" className={entry.selectable ? "file-row selectable" : "file-row"} onClick={() => entry.kind === "directory" && !entry.selectable ? setPath(entry.path) : entry.selectable ? onSelect(entry.path) : undefined}><strong>{entry.kind === "directory" ? "📁" : mode === "image_folder" ? "🖼️" : "🎞️"} {entry.name}</strong><span>{entry.match_count} matching {mode === "image_folder" ? "images" : "videos"}</span></button>)}</div></div></div>;
+  useEffect(() => { setBrowserError(""); api.fileBrowser(path, mode).then((result) => { setBrowser(result); if (!path) setPath(result.path); }).catch((reason) => setBrowserError(reason instanceof Error ? reason.message : String(reason))); }, [path, mode]);
+  const visibleEntries = (browser?.entries ?? []).filter((entry) => entry.kind === "directory" || (mode === "video" && entry.selectable));
+  const navigate = () => { setBrowserError(""); void api.fileBrowser(path, mode).then((result) => { setBrowser(result); setPath(result.path); }).catch((reason) => setBrowserError(reason instanceof Error ? reason.message : String(reason))); };
+  return <div className="modal-backdrop"><div className="file-manager"><div className="sidebar-header"><div><h2>Choose a {mode === "image_folder" ? "folder" : "video"}</h2><p className="muted">Navigate to the container-visible location, then confirm the folder or select one video file.</p></div><button className="secondary action-neutral" type="button" onClick={onClose}>Close</button></div><FileManagerShortcuts shortcuts={browser?.shortcuts ?? []} currentPath={browser?.path ?? path} onSelect={setPath} /><div className="folder-navigation"><label><span>Current location</span><input value={path} onChange={(event) => setPath(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); navigate(); } }} /></label><button type="button" className="secondary action-navigate folder-go" onClick={navigate}>Open path</button></div>{browserError && <p className="review-error" role="alert">{browserError}</p>}{mode === "image_folder" && browser ? <div className="folder-selection-row"><span className="muted">{browser.current_match_count > 0 ? `${browser.current_match_count} supported images in this folder` : "No supported images in this folder"}</span><button type="button" className="primary action-assign" disabled={browser.current_match_count < 1} onClick={() => onSelect(browser.path)}>Use this folder</button></div> : null}<div className="file-list" aria-label="Folders">{visibleEntries.map((entry) => <button key={entry.path} type="button" className={entry.selectable ? "file-row selectable" : "file-row"} onClick={() => entry.kind === "directory" ? setPath(entry.path) : onSelect(entry.path)}><FolderOpen size={18} aria-hidden="true" /><strong>{entry.name}</strong>{entry.kind === "file" ? <span>Select video</span> : null}</button>)}</div></div></div>;
 }
 
 function SchemaPage({ project, t }: { project: Project; t: (key: string) => string }) {
@@ -899,28 +1135,129 @@ function schemaOptionLabel(schema: ClassSchema, duplicateNames: Set<string>) {
 
 export function pseudoRunLabel(run: PseudoLabelRun) {
   const name = run.run_name || run.schema_name || `Pseudo_${run.id.slice(0, 8)}`;
-  const created = run.created_at ? String(run.created_at).replace("T", " ").slice(0, 19) : "unknown time";
-  const imageSummary = `${Number(run.labeled_count ?? 0)}/${Number(run.image_count ?? 0)} images`;
-  return `[Review_${created.slice(0, 10).replaceAll("-", "")}_${run.id.slice(0, 6)}] ${name} · ${imageSummary}`;
+  return `[Pseudo · ${name}]`;
 }
 
 export function augmentationRunLabel(run: AugmentationRun, pseudoRuns: PseudoLabelRun[] = []) {
   const pseudo = pseudoRuns.find((candidate) => candidate.id === run.pseudo_label_run_id);
-  const source = pseudo ? pseudoRunLabel(pseudo).split("] ")[0] + "]" : "[Review_any]";
-  const created = run.created_at ? String(run.created_at).replace("T", " ").slice(0, 19) : "unknown time";
-  return `${source} → [Augment_${created.slice(0, 10).replaceAll("-", "")}_${run.id.slice(0, 6)}] ${run.name || run.id} · ${Number(run.created_image_count ?? 0)} images`;
+  const source = pseudo ? pseudoRunLabel(pseudo) : "[Pseudo · All project labels]";
+  return `${source} → [Augment · ${augmentationBuildName(run)}]${run.outdated ? " · Outdated — rebuild required" : ""}`;
 }
 
-export function datasetSplitLineageLabel(split: DatasetSplitRun | Record<string, unknown>, pseudoRuns: PseudoLabelRun[] = [], augmentationRuns: AugmentationRun[] = []) {
+type HistoryArtifactType = "pseudo" | "augmentation" | "split" | "training" | "conversion" | "export";
+
+const HISTORY_DOWNSTREAM: Record<HistoryArtifactType, string> = {
+  pseudo: "downstream Augment, Split, Training, Conversion and Export history",
+  augmentation: "downstream Split, Training, Conversion and Export history",
+  split: "downstream Training, Conversion and Export history",
+  training: "downstream Conversion and Export history",
+  conversion: "downstream Export history",
+  export: "this Export history only"
+};
+
+export function HistoryDeleteButton({ projectId, artifactType, artifactId, label, onDeleted, disabled = false }: {
+  projectId: string;
+  artifactType: HistoryArtifactType;
+  artifactId: string;
+  label: string;
+  onDeleted: () => Promise<void>;
+  disabled?: boolean;
+}) {
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState("");
+  async function remove() {
+    if (!window.confirm(`Delete ${artifactType} history “${label}” and ${HISTORY_DOWNSTREAM[artifactType]}? Project input and the shared Open Data cache will be preserved.`)) return;
+    setDeleting(true);
+    setError("");
+    try {
+      await api.deleteHistory(projectId, artifactType, artifactId);
+      await onDeleted();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setDeleting(false);
+    }
+  }
+  return <div className="history-delete-action"><button type="button" className="secondary danger compact-action action-delete" disabled={disabled || deleting} aria-label={`Delete ${artifactType} history ${label}`} onClick={remove}><Trash2 size={16} />{deleting ? "Deleting…" : "Delete"}</button>{error ? <span className="review-error" role="alert">{error}</span> : null}</div>;
+}
+
+function splitBuckets(split: DatasetSplitRun | Record<string, unknown>): Record<string, string[]> {
+  const raw = split.image_ids_json;
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return parsed && typeof parsed === "object" ? parsed as Record<string, string[]> : {};
+  } catch {
+    return {};
+  }
+}
+
+export function datasetSplitImageCount(split: DatasetSplitRun | Record<string, unknown>): number {
+  return Object.values(splitBuckets(split)).reduce((total, ids) => total + (Array.isArray(ids) ? ids.length : 0), 0);
+}
+
+function pseudoBuildName(run?: PseudoLabelRun) {
+  return run?.run_name || run?.schema_name || (run ? `Pseudo ${run.id.slice(0, 6)}` : "All project labels");
+}
+
+function augmentationBuildName(run?: AugmentationRun) {
+  return run?.name || (run ? `Augment ${run.id.slice(0, 6)}` : "No Augment");
+}
+
+function splitBuildName(date = new Date()) {
+  return versionedBuildName("Split", [], date);
+}
+
+function splitDisplayName(split: DatasetSplitRun | Record<string, unknown>) {
+  const storedName = String(split.name ?? "");
+  if ((storedName === "default" || /^current-\d+$/.test(storedName)) && split.created_at) {
+    const created = new Date(String(split.created_at));
+    if (!Number.isNaN(created.getTime())) return splitBuildName(created);
+  }
+  return storedName || `Split_${String(split.id ?? "build").slice(0, 6)}`;
+}
+
+function findOpenDataImport(openData: OpenDataImport | OpenDataImport[] | null | undefined, id: unknown) {
+  return (Array.isArray(openData) ? openData : openData ? [openData] : []).find((item) => item.id === id) ?? null;
+}
+
+function openDataVersionName(item?: OpenDataImport | null) {
+  return item?.version_name || (item ? `${item.dataset_key} ${item.sample_percentage}%` : "No Open Data");
+}
+
+export function datasetSplitOptionLabel(split: DatasetSplitRun | Record<string, unknown>, pseudoRuns: PseudoLabelRun[] = [], augmentationRuns: AugmentationRun[] = [], openDataImport?: OpenDataImport | OpenDataImport[] | null) {
   const pseudoId = String(split.pseudo_label_run_id ?? "");
   const augmentId = String(split.augmentation_run_id ?? "");
   const pseudo = pseudoRuns.find((run) => run.id === pseudoId);
   const augment = augmentationRuns.find((run) => run.id === augmentId);
-  const splitName = String(split.name ?? split.id ?? "split");
-  const splitPrefix = `[Split_${String(split.created_at ?? "").slice(0, 10).replaceAll("-", "") || "build"}_${String(split.id ?? "").slice(0, 6)}] ${splitName}`;
-  const pseudoLabel = pseudo ? pseudoRunLabel(pseudo).split("] ")[1] || pseudoRunLabel(pseudo) : "All labeled images";
-  const augmentLabel = augment ? `${augment.name || augment.id} · ${Number(augment.created_image_count ?? 0)}/${Number(augment.source_image_count ?? 0)} images` : "No augment/source build selected";
-  return `${splitPrefix} · pseudo: ${pseudoLabel} · dataset source: ${augmentLabel}`;
+  const total = datasetSplitImageCount(split);
+  const openData = findOpenDataImport(openDataImport, split.open_data_import_id);
+  const pseudoLabel = `[Pseudo · ${pseudoBuildName(pseudo)}]`;
+  const augmentLabel = `[Augment · ${augmentationBuildName(augment)}]`;
+  const openDataLabel = split.open_data_import_id ? ` + [Open Data · ${openData ? openDataVersionName(openData) : "linked import"}${openData ? ` · ${openData.selected_image_count.toLocaleString()} images` : ""}]` : "";
+  return `${pseudoLabel} → ${augmentLabel}${openDataLabel} → [Split · ${splitDisplayName(split)}${total ? ` · ${total.toLocaleString()} images` : ""}]${split.outdated ? " · Outdated — rebuild required" : ""}`;
+}
+
+export function datasetSplitLineageLabel(split: DatasetSplitRun | Record<string, unknown>, pseudoRuns: PseudoLabelRun[] = [], augmentationRuns: AugmentationRun[] = [], openDataImport?: OpenDataImport | OpenDataImport[] | null) {
+  return datasetSplitOptionLabel(split, pseudoRuns, augmentationRuns, openDataImport);
+}
+
+export function DatasetLineageChain({ split, pseudoRun, augmentationRun, openDataImport }: { split?: DatasetSplitRun | Record<string, unknown> | null; pseudoRun?: PseudoLabelRun; augmentationRun?: AugmentationRun; openDataImport?: OpenDataImport | OpenDataImport[] | null }) {
+  const total = split ? datasetSplitImageCount(split) : 0;
+  const matchingOpenData = split ? findOpenDataImport(openDataImport, split.open_data_import_id) : (Array.isArray(openDataImport) ? openDataImport[0] : openDataImport ?? null);
+  const openDataCount = matchingOpenData?.selected_image_count ?? 0;
+  const projectCount = split && total ? Math.max(0, total - openDataCount) : Number(augmentationRun?.created_image_count ?? pseudoRun?.labeled_count ?? 0);
+  const splitName = split ? splitDisplayName(split) : "New Split";
+  const accessible = `[Pseudo · ${pseudoBuildName(pseudoRun)}] → [Augment · ${augmentationBuildName(augmentationRun)}]${matchingOpenData || split?.open_data_import_id ? ` + [Open Data · ${matchingOpenData?.dataset_key || "linked import"}]` : ""} → [Split · ${splitName}${total ? ` · ${total.toLocaleString()} images` : ""}]`;
+  return (
+    <div className="dataset-lineage" aria-label={accessible}>
+      <span className="lineage-node lineage-pseudo">[Pseudo · {pseudoBuildName(pseudoRun)}{pseudoRun?.labeled_count != null ? ` · ${Number(pseudoRun.labeled_count).toLocaleString()} labeled` : ""}]</span>
+      <span className="lineage-connector" aria-hidden="true">→</span>
+      <span className="lineage-node lineage-augment">[Augment · {augmentationBuildName(augmentationRun)}{projectCount ? ` · ${projectCount.toLocaleString()} images` : ""}]</span>
+      {matchingOpenData || split?.open_data_import_id ? <><span className="lineage-connector" aria-hidden="true">+</span><span className="lineage-node lineage-open-data">[Open Data · {matchingOpenData ? openDataVersionName(matchingOpenData) : "linked import"}{matchingOpenData ? ` · ${openDataCount.toLocaleString()} images` : ""}]</span></> : null}
+      <span className="lineage-connector" aria-hidden="true">→</span>
+      <span className="lineage-node lineage-split">[Split · {splitName}{total ? ` · ${total.toLocaleString()} images` : " · total after build"}]</span>
+    </div>
+  );
 }
 
 export function chooseLatestBuildSelection<T extends { id: string; created_at?: string | null }>(currentId: string, builds: T[], preferLatest: boolean) {
@@ -943,19 +1280,47 @@ export function AugmentationBuildSummary({ run, pseudoRuns = [] }: { run?: Augme
       <p><strong>{run.name || run.id}</strong></p>
       <p className="muted">{pseudo ? pseudoRunLabel(pseudo) : "All labeled images"}</p>
       <p className="muted">{run.output_dir}</p>
+      <OutdatedArtifactNotice outdated={run.outdated} reason={run.outdated_reason} rebuild="Rebuild Augment and Split before training." />
     </section>
   );
 }
 
-export function TrainingInputSummary({ split, pseudoRuns = [], augmentationRuns = [] }: { split?: DatasetSplitRun | Record<string, unknown> | null; pseudoRuns?: PseudoLabelRun[]; augmentationRuns?: AugmentationRun[] }) {
+export function OutdatedArtifactNotice({ outdated, reason, rebuild }: { outdated?: boolean; reason?: string | null; rebuild: string }) {
+  if (!outdated) return null;
+  return (
+    <div className="outdated-artifact-notice" role="status">
+      <span className="outdated-badge">Outdated</span>
+      <p>{outdatedReasonMessage(reason)}</p>
+      <p>{rebuild}</p>
+    </div>
+  );
+}
+
+export function outdatedReasonMessage(reason?: string | null): string {
+  if (!reason) return "A project image was removed after this build was created.";
+  try {
+    const parsed = JSON.parse(reason) as { code?: unknown; image_ids?: unknown };
+    if (parsed.code === "project_image_removed" && Array.isArray(parsed.image_ids)) {
+      const count = parsed.image_ids.length;
+      return count === 1
+        ? "A project image was removed after this build was created."
+        : `${count || "Multiple"} project images were removed after this build was created.`;
+    }
+  } catch {
+    // Older records may already contain a user-facing prose reason.
+  }
+  return reason;
+}
+
+export function TrainingInputSummary({ split, pseudoRuns = [], augmentationRuns = [], openDataImport }: { split?: DatasetSplitRun | Record<string, unknown> | null; pseudoRuns?: PseudoLabelRun[]; augmentationRuns?: AugmentationRun[]; openDataImport?: OpenDataImport | OpenDataImport[] | null }) {
   if (!split) return <p className="muted">Select a split build before training.</p>;
+  const pseudo = pseudoRuns.find((run) => run.id === String(split.pseudo_label_run_id ?? ""));
   const augment = augmentationRuns.find((run) => run.id === String(split.augmentation_run_id ?? ""));
   return (
     <section className="training-input-summary">
       <strong>Training input</strong>
-      <p>Split build: {String(split.name ?? split.id ?? "split")}</p>
-      <p>Dataset source: {augment ? `${augment.name || augment.id} · ${Number(augment.created_image_count ?? 0)} images` : "No augment/source build selected"}</p>
-      <p className="muted">{datasetSplitLineageLabel(split, pseudoRuns, augmentationRuns)}</p>
+      <DatasetLineageChain split={split} pseudoRun={pseudo} augmentationRun={augment} openDataImport={openDataImport} />
+      <OutdatedArtifactNotice outdated={Boolean(split.outdated)} reason={typeof split.outdated_reason === "string" ? split.outdated_reason : null} rebuild="Rebuild Split before training." />
     </section>
   );
 }
@@ -1005,7 +1370,7 @@ function PseudoPage({ project, models, jobs, refreshJobs, t }: { project: Projec
   const [runs, setRuns] = useState<PseudoLabelRun[]>([]);
   const [schemaId, setSchemaId] = useState("");
   const [schemaName, setSchemaName] = useState("person-car-aerial-v1");
-  const [pseudoRunName, setPseudoRunName] = useState(() => `Pseudo_${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}_v001`);
+  const [pseudoRunName, setPseudoRunName] = useState(() => versionedBuildName("Pseudo"));
   const [classes, setClasses] = useState<ClassSchema["classes"]>(defaultPromptClasses());
   const [worldModel, setWorldModel] = useState("");
   const [mergeBoxes, setMergeBoxes] = useState(false);
@@ -1018,6 +1383,7 @@ function PseudoPage({ project, models, jobs, refreshJobs, t }: { project: Projec
   const [schemaDirty, setSchemaDirty] = useState(true);
   const [savingSchema, setSavingSchema] = useState(false);
   const [schemaNotice, setSchemaNotice] = useState("");
+  const availableWorldModels = supportedWorldModels(models.world_models, models.world_model_details);
   const selectedSchema = schemas.find((schema) => schema.id === schemaId);
   const serverPseudoJob = findWorkflowJob(jobs, "pseudo_label");
   const pseudoJob = isActiveJob(serverPseudoJob) ? serverPseudoJob : isActiveJob(localPseudoJob) ? localPseudoJob : serverPseudoJob ?? localPseudoJob;
@@ -1039,15 +1405,18 @@ function PseudoPage({ project, models, jobs, refreshJobs, t }: { project: Projec
       setClasses(nextSchemas[0].classes.map((item) => ({ ...item, descriptors: [...item.descriptors] })));
       setSchemaDirty(false);
     }
+    return nextRuns as PseudoLabelRun[];
   }
 
   useEffect(() => {
-    setPseudoRunName(`Pseudo_${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}_v001`);
-    loadHistory().catch(console.error);
+    setPseudoRunName(versionedBuildName("Pseudo"));
+    loadHistory().then((nextRuns) => {
+      setPseudoRunName(versionedBuildName("Pseudo", nextRuns.map((run) => run.run_name || "")));
+    }).catch(console.error);
   }, [project.id]);
   useEffect(() => {
-    setWorldModel(models.world_models[0] ?? "yolov8s-world.pt");
-  }, [models.world_models]);
+    setWorldModel((current) => availableWorldModels.includes(current) ? current : availableWorldModels[0] ?? "");
+  }, [models.world_models, models.world_model_details]);
   useEffect(() => {
     setLocalPseudoJob((current) => reconcileLocalPseudoJob(current, serverPseudoJob, project.id));
   }, [project.id, serverPseudoJob?.id, serverPseudoJob?.status]);
@@ -1098,6 +1467,10 @@ function PseudoPage({ project, models, jobs, refreshJobs, t }: { project: Projec
     if (!schemaId || schemaDirty) {
       setSchemaNotice("Please commit the current schema to history before Generate, then choose it from History if needed.");
       setSubmitNotice("Generate blocked: schema is not committed yet.");
+      return;
+    }
+    if (!worldModel) {
+      setSubmitNotice("Generate blocked: no supported local world model is installed.");
       return;
     }
     setSubmitNotice(mode === "restart" ? "Restarting pseudo-label run with current settings…" : "Submitting pseudo-label run with the committed schema…");
@@ -1176,12 +1549,15 @@ function PseudoPage({ project, models, jobs, refreshJobs, t }: { project: Projec
       <button type="button" className="secondary add-class-action action-add" onClick={() => { markSchemaDirty(); setClasses((current) => [...current, { class_id: current.length, class_name: "new_class", descriptors: ["new object"] }]); }}>+ class</button>
       <details className="history-panel">
         <summary>Previous pseudo-label runs <HelpTooltip text="These are prior Generate runs. They record which schema/settings produced labels, but selecting schemas is controlled by the History dropdown above." /></summary>
-        {runs.map((run) => <div className="row-card" key={run.id}><strong>{pseudoRunLabel(run)}</strong><span>{run.created_at} · conf={String(run.confidence)} iou={String(run.iou)} · images={String(run.labeled_count)}/{String(run.image_count)} · merge={((Number(run.merge_rate) || 0) * 100).toFixed(1)}%</span></div>)}
+        {runs.map((run) => <div className="row-card history-row" key={run.id}><div><strong>{pseudoRunLabel(run)}</strong><span>{run.created_at} · conf={String(run.confidence)} iou={String(run.iou)} · images={String(run.labeled_count)}/{String(run.image_count)} · merge={((Number(run.merge_rate) || 0) * 100).toFixed(1)}%</span></div><HistoryDeleteButton projectId={project.id} artifactType="pseudo" artifactId={run.id} label={pseudoBuildName(run)} onDeleted={async () => { await loadHistory(); await refreshJobs(); }} /></div>)}
       </details>
       <label>
-        <span className="label-with-help">YOLO-World model <HelpTooltip text="The open-vocabulary model used for pseudo labeling. Prompt descriptors are sent to this model, then detections are mapped back to class ids." /></span>
-        <select value={worldModel} onChange={(event) => setWorldModel(event.target.value)}>
-          {(models.world_models.length ? models.world_models : ["yolov8s-world.pt"]).map((model) => <option key={model}>{model}</option>)}
+        <span className="label-with-help">World model <HelpTooltip text="The open-vocabulary model used for pseudo labeling. YOLOE segmentation checkpoints are converted to bounding-box annotations; masks are not stored." /></span>
+        <select value={worldModel} disabled={!availableWorldModels.length} onChange={(event) => setWorldModel(event.target.value)}>
+          {availableWorldModels.length ? availableWorldModels.map((model) => {
+            const info = models.world_model_details.find((item) => item.name === model);
+            return <option key={model} value={model}>{info ? worldModelLabel(info) : model}</option>;
+          }) : <option value="">No supported local world models</option>}
         </select>
       </label>
       <div className="field-row">
@@ -1201,41 +1577,48 @@ function PseudoPage({ project, models, jobs, refreshJobs, t }: { project: Projec
         mergeIou={mergeIou}
       />
       {previewPath && <div className="pseudo-preview"><strong>Latest processed preview</strong><img src={`/api/files?path=${encodeURIComponent(previewPath)}`} alt="latest pseudo-label preview" /></div>}
-      <ProcessingButton busy={submitting || isActiveJob(pseudoJob)} disabled={!schemaId || schemaDirty} progress={pseudoJob ? pseudoJob.progress : submitting ? 8 : undefined} statusText={pseudoJob ? pseudoJob.message || `${pseudoJob.name}: ${pseudoJob.status}` : submitNotice || "Submitting pseudo-label run…"} taskName="Pseudo Label Generate" className="primary action-process"><Play size={17} />Generate Pseudo Labels</ProcessingButton>
+      <ProcessingButton busy={submitting || isActiveJob(pseudoJob)} jobId={isActiveJob(pseudoJob) ? pseudoJob?.id : undefined} disabled={!schemaId || schemaDirty || !worldModel} progress={pseudoJob ? pseudoJob.progress : submitting ? 8 : undefined} statusText={pseudoJob ? pseudoJob.message || `${pseudoJob.name}: ${pseudoJob.status}` : submitNotice || "Submitting pseudo-label run…"} taskName="Pseudo Label Generate" className="primary action-process"><Play size={17} />Generate Pseudo Labels</ProcessingButton>
     </form>
   );
 }
 
-type AugmentationEffectKey = "hue" | "exposure" | "blur" | "noise" | "gain" | "boxMotionBlur" | "rotation";
-type AugmentationEffect = { id: string; key: AugmentationEffectKey; value: number; showBbox?: boolean };
-type AugmentationSettings = { effects: AugmentationEffect[]; copies: number; skip: boolean };
+type AugmentationEffectKey = "hue" | "exposure" | "blur" | "noise" | "gain" | "boxMotionBlur" | "rotation" | "mirror";
+type AugmentationEffect = { id: string; key: AugmentationEffectKey; value: number; showBbox?: boolean; direction?: "horizontal" | "vertical"; probability?: number };
+type AugmentationSettings = { effects: AugmentationEffect[]; copies: number; skip: boolean; horizontalFlip?: boolean; verticalFlip?: boolean };
 type AugmentationDraft = { name: string; settings: AugmentationSettings };
 type AugmentationField = { key: AugmentationEffectKey; title: string; description: string; min: number; max: number; unit?: string };
 
-const DEFAULT_AUGMENTATION_DRAFT: AugmentationDraft = { name: "augmented-v1", settings: { effects: [], copies: 3, skip: false } };
+const DEFAULT_AUGMENTATION_DRAFT: AugmentationDraft = { name: "", settings: { effects: [], copies: 3, skip: false } };
 
 export function buildAugmentationDraftStorageKey(projectId: string) {
   return `object-autolabel:augmentation-draft:${projectId}`;
 }
 
 function isAugmentationEffectKey(value: unknown): value is AugmentationEffectKey {
-  return ["hue", "exposure", "blur", "noise", "gain", "boxMotionBlur", "rotation"].includes(String(value));
+  return ["hue", "exposure", "blur", "noise", "gain", "boxMotionBlur", "rotation", "mirror"].includes(String(value));
 }
 
 export function loadAugmentationDraft(projectId: string, storage: Pick<Storage, "getItem"> | null = typeof window !== "undefined" ? window.localStorage : null): AugmentationDraft {
-  if (!storage) return DEFAULT_AUGMENTATION_DRAFT;
+  const fallback = { ...DEFAULT_AUGMENTATION_DRAFT, name: versionedBuildName("Augment") };
+  if (!storage) return fallback;
   try {
     const raw = storage.getItem(buildAugmentationDraftStorageKey(projectId));
-    if (!raw) return DEFAULT_AUGMENTATION_DRAFT;
+    if (!raw) return fallback;
     const parsed = JSON.parse(raw) as Partial<AugmentationDraft>;
     const effects = Array.isArray(parsed.settings?.effects)
       ? parsed.settings.effects.filter((effect): effect is AugmentationEffect => Boolean(effect && typeof effect.id === "string" && isAugmentationEffectKey(effect.key)))
       : [];
     const copies = [3, 5, 8, 10].includes(Number(parsed.settings?.copies)) ? Number(parsed.settings?.copies) : DEFAULT_AUGMENTATION_DRAFT.settings.copies;
     const skip = Boolean(parsed.settings?.skip);
-    return { name: typeof parsed.name === "string" && parsed.name.trim() ? parsed.name : DEFAULT_AUGMENTATION_DRAFT.name, settings: { effects, copies, skip } };
+    const hasMirror = effects.some((effect) => effect.key === "mirror");
+    const legacyHorizontal = Boolean(parsed.settings?.horizontalFlip);
+    const legacyVertical = Boolean(parsed.settings?.verticalFlip);
+    const migratedEffects = !hasMirror && (legacyHorizontal || legacyVertical)
+      ? [...effects, { id: `mirror-migrated-${projectId}`, key: "mirror" as const, value: 0, direction: legacyVertical ? "vertical" as const : "horizontal" as const, probability: 100 }]
+      : effects;
+    return { name: typeof parsed.name === "string" && parsed.name.trim() ? parsed.name : fallback.name, settings: { effects: migratedEffects, copies, skip } };
   } catch {
-    return DEFAULT_AUGMENTATION_DRAFT;
+    return fallback;
   }
 }
 
@@ -1251,7 +1634,8 @@ const AUGMENTATION_FIELDS: AugmentationField[] = [
   { key: "noise", title: "Random Noise", description: "", min: 0, max: 100 },
   { key: "gain", title: "Camera Gain Variance", description: "", min: 0, max: 60 },
   { key: "boxMotionBlur", title: "Bounding Box: Motion Blur", description: "", min: 0, max: 15 },
-  { key: "rotation", title: "Random Rotation", description: "", min: 0, max: 30, unit: "°" }
+  { key: "rotation", title: "Random Rotation", description: "", min: 0, max: 30, unit: "°" },
+  { key: "mirror", title: "Mirror", description: "", min: 0, max: 100, unit: "%" }
 ];
 
 function augmentationField(key: AugmentationEffectKey) {
@@ -1260,13 +1644,17 @@ function augmentationField(key: AugmentationEffectKey) {
 
 function newAugmentationEffect(key: AugmentationEffectKey): AugmentationEffect {
   const field = augmentationField(key);
-  return { id: `${key}-${Date.now()}-${Math.random().toString(16).slice(2)}`, key, value: Math.max(1, Math.round(field.max / 3)), showBbox: false };
+  return { id: `${key}-${Date.now()}-${Math.random().toString(16).slice(2)}`, key, value: key === "mirror" ? 0 : Math.max(1, Math.round(field.max / 3)), showBbox: false, ...(key === "mirror" ? { direction: "horizontal" as const, probability: 50 } : {}) };
 }
 
 function aggregateAugmentationSettings(settings: AugmentationSettings) {
-  const payload = { hue: 0, exposure: 0, noise: 0, blur: 0, gain: 0, box_motion_blur: 0, rotation: 0 };
+  const payload = { hue: 0, exposure: 0, noise: 0, blur: 0, gain: 0, box_motion_blur: 0, rotation: 0, horizontal_flip: false, vertical_flip: false, mirror_probability: 0 };
   settings.effects.forEach((effect) => {
-    if (effect.key === "boxMotionBlur") payload.box_motion_blur = Math.max(payload.box_motion_blur, effect.value);
+    if (effect.key === "mirror") {
+      payload.horizontal_flip = (effect.direction ?? "horizontal") === "horizontal";
+      payload.vertical_flip = effect.direction === "vertical";
+      payload.mirror_probability = Math.max(0, Math.min(100, effect.probability ?? 50)) / 100;
+    } else if (effect.key === "boxMotionBlur") payload.box_motion_blur = Math.max(payload.box_motion_blur, effect.value);
     else payload[effect.key] = Math.max(payload[effect.key], effect.value);
   });
   return payload;
@@ -1305,7 +1693,7 @@ export function AugmentationControlPanel({ settings, onChange, onEditEffect }: {
             <article key={effect.id} className="augmentation-stack-item">
               <span className="stack-order">{index + 1}</span>
               <div><strong>{field.title}</strong></div>
-              <span className="effect-value">±{effect.value}{field.unit ?? ""}</span>
+              <span className="effect-value">{effect.key === "mirror" ? `${effect.direction === "vertical" ? "Top ↔ Bottom" : "Left ↔ Right"} · ${effect.probability ?? 50}%` : `±${effect.value}${field.unit ?? ""}`}</span>
               <div className="inline-actions">
                 <button type="button" className="secondary action-browse" onClick={() => onEditEffect(effect)}>Edit</button>
                 <button type="button" className="secondary action-delete" onClick={() => removeEffect(effect.id)}>Remove</button>
@@ -1320,14 +1708,16 @@ export function AugmentationControlPanel({ settings, onChange, onEditEffect }: {
 
 export function AugmentationEffectModal({ draft, previewSamples, loading, error, onChange, onApply, onClose }: { draft: AugmentationEffect; previewSamples: AugmentationPreviewSample[]; loading: boolean; error: string; onChange: (effect: AugmentationEffect) => void; onApply: () => void; onClose: () => void }) {
   const field = augmentationField(draft.key);
+  const isMirror = draft.key === "mirror";
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={`Configure ${field.title}`}>
       <section className="modal-card augmentation-effect-modal">
         <div className="sidebar-header">
-          <div><h2>Configure {field.title}</h2><p className="muted">Adjust the ± sampling range on one random labeled photo. Bbox preview is optional because overlay rendering can add latency.</p></div>
+          <div><h2>Configure {field.title}</h2><p className="muted">{isMirror ? "Choose one mirror direction and how often it should be triggered across generated images." : "Adjust the ± sampling range on one random labeled photo. Bbox preview is optional because overlay rendering can add latency."}</p></div>
           <button type="button" className="secondary" onClick={onClose}>Close</button>
         </div>
-        <label><span>± value range {field.unit ? `(${field.unit})` : ""}</span><input type="range" min={field.min} max={field.max} value={draft.value} onChange={(event) => onChange({ ...draft, value: Number(event.target.value) })} /><strong>−{draft.value}{field.unit ?? ""} / +{draft.value}{field.unit ?? ""}</strong></label>
+        {isMirror ? <fieldset className="mirror-effect-editor"><legend>Mirror direction</legend><label className="check-row"><input type="radio" name={`mirror-direction-${draft.id}`} checked={(draft.direction ?? "horizontal") === "horizontal"} onChange={() => onChange({ ...draft, direction: "horizontal" })} />Left ↔ Right</label><label className="check-row"><input type="radio" name={`mirror-direction-${draft.id}`} checked={draft.direction === "vertical"} onChange={() => onChange({ ...draft, direction: "vertical" })} />Top ↔ Bottom</label></fieldset> : <label><span>± value range {field.unit ? `(${field.unit})` : ""}</span><input type="range" min={field.min} max={field.max} value={draft.value} onChange={(event) => onChange({ ...draft, value: Number(event.target.value) })} /><strong>−{draft.value}{field.unit ?? ""} / +{draft.value}{field.unit ?? ""}</strong></label>}
+        {isMirror ? <label><span>Trigger probability</span><input type="range" min="0" max="100" step="1" value={draft.probability ?? 50} onChange={(event) => onChange({ ...draft, probability: Number(event.target.value) })} /><strong>{draft.probability ?? 50}% of generated images</strong></label> : null}
         <label className="check-row"><input type="checkbox" checked={Boolean(draft.showBbox)} onChange={(event) => onChange({ ...draft, showBbox: event.target.checked })} />Preview bounding boxes</label>
         {loading && <p className="inline-feedback">Sampling preview image…</p>}
         {error && <p className="review-error">{error}</p>}
@@ -1362,6 +1752,7 @@ function AugmentationPage({ project, jobs, refreshJobs, artifactRevision }: { pr
       const [nextPseudoRuns, nextAugmentationRuns] = await Promise.all([api.pseudoLabelRuns(project.id), api.augmentationRuns(project.id)]);
       setPseudoRuns(nextPseudoRuns);
       setAugmentationRuns(nextAugmentationRuns);
+      setName((current) => /^Augment_\d+_v\d+$/i.test(current) ? versionedBuildName("Augment", nextAugmentationRuns.map((run) => run.name || "")) : current);
       if (!selectedPseudoRunId && nextPseudoRuns[0]?.id) setSelectedPseudoRunId(nextPseudoRuns[0].id);
       const nextId = nextSelectedId || chooseLatestBuildSelection(selectedBuildId, nextAugmentationRuns, false);
       setSelectedBuildId(nextId);
@@ -1404,6 +1795,7 @@ function AugmentationPage({ project, jobs, refreshJobs, artifactRevision }: { pr
     const runPreview = async () => {
       try {
         const payload = aggregateAugmentationSettings({ effects: [editingEffect], copies: settings.copies, skip: false });
+        if (editingEffect.key === "mirror") payload.mirror_probability = 1;
         const samples = await api.augmentPreview(project.id, { ...payload, polarity: 1, limit: 1 });
         if (!cancelled) setModalPreviewSamples(samples);
       } catch (error) {
@@ -1448,7 +1840,6 @@ function AugmentationPage({ project, jobs, refreshJobs, artifactRevision }: { pr
             name,
             pseudo_label_run_id: selectedPseudoRunId || null,
             ...aggregatePayload,
-            horizontal_flip: false,
             copies: settings.copies,
             skip_augment: settings.skip
           });
@@ -1472,9 +1863,10 @@ function AugmentationPage({ project, jobs, refreshJobs, artifactRevision }: { pr
       <AugmentationBuildSummary run={selectedBuild} pseudoRuns={pseudoRuns} />
       {loadingBuilds ? <p className="inline-feedback"><LoaderCircle className="spin" size={15} /> Refreshing build versions…</p> : null}
       {augmentationRuns.length ? <div className="field-row"><label><span>Inspect build</span><select value={selectedBuildId} disabled={loadingBuilds} onChange={(event) => { setSelectedBuildId(event.target.value); setCreatedSamples([]); }}><option value="">Select augment/source build</option>{augmentationRuns.map((run) => <option key={run.id} value={run.id}>{augmentationRunLabel(run, pseudoRuns)}</option>)}</select></label><label className="check-row"><input type="checkbox" checked={showCreatedBoxes} onChange={(event) => setShowCreatedBoxes(event.target.checked)} />Show bounding boxes</label><button type="button" className="secondary action-browse" disabled={loadingBuilds} onClick={() => loadCreatedPreview().catch(console.error)}><Dice5 size={16} />Random sample</button></div> : null}
+      {augmentationRuns.length ? <details className="history-panel"><summary>Augment history</summary><div className="version-list">{augmentationRuns.map((run) => <article className="history-row" key={run.id}><div><strong>{augmentationRunLabel(run, pseudoRuns)}</strong><span>{Number(run.created_image_count ?? 0).toLocaleString()} generated images</span></div><HistoryDeleteButton projectId={project.id} artifactType="augmentation" artifactId={run.id} label={augmentationBuildName(run)} onDeleted={async () => { setCreatedSamples([]); await loadAugmentationRuns(); await refreshJobs(); }} /></article>)}</div></details> : null}
       {createdSamples.length ? <section className="augmentation-preview created-augmentation-preview"><h3>Random generated output check</h3><p className="muted">After Create augmented images, inspect random generated images to make sure transformed labels still align.</p><div className="split-sample-grid">{createdSamples.map((sample) => <AugmentationPreviewCard key={`created-${sample.image_id}`} sample={sample} showBoxes={showCreatedBoxes} />)}</div></section> : null}
       {augmentationJob && <div className="job-progress-inline" title={augmentationJob.message}><span>{augmentationJob.name}: {augmentationJob.status}</span><progress value={augmentationJob.progress} max={100} /><small>{augmentationJob.progress}% · {augmentationJob.message}</small></div>}
-      <ProcessingButton busy={submitting || isActiveJob(augmentationJob)} disabled={!hasEffects && !settings.skip} progress={augmentationJob ? augmentationJob.progress : submitting ? 12 : undefined} statusText={augmentationJob ? augmentationJob.message || `${augmentationJob.name}: ${augmentationJob.status}` : "Submitting augmentation run…"} className="primary action-process"><Play size={17} />Create augmented images</ProcessingButton>
+      <ProcessingButton busy={submitting || isActiveJob(augmentationJob)} jobId={isActiveJob(augmentationJob) ? augmentationJob?.id : undefined} disabled={!hasEffects && !settings.skip} progress={augmentationJob ? augmentationJob.progress : submitting ? 12 : undefined} statusText={augmentationJob ? augmentationJob.message || `${augmentationJob.name}: ${augmentationJob.status}` : "Submitting augmentation run…"} className="primary action-process"><Play size={17} />Create augmented images</ProcessingButton>
       {editingEffect && <AugmentationEffectModal draft={editingEffect} previewSamples={modalPreviewSamples} loading={previewLoading} error={previewError} onChange={setEditingEffect} onApply={applyEditingEffect} onClose={() => setEditingEffect(null)} />}
     </form>
   );
@@ -1505,16 +1897,20 @@ export function AugmentationPreviewCard({ sample, showBoxes = true }: { sample: 
   );
 }
 
-function SplitPage({ project, jobs, refreshJobs, t, artifactRevision }: { project: Project; jobs: Job[]; refreshJobs: () => Promise<void>; t: (key: string) => string; artifactRevision: number }) {
+export function SplitPage({ project, jobs, refreshJobs, t, artifactRevision }: { project: Project; jobs: Job[]; refreshJobs: () => Promise<void>; t: (key: string) => string; artifactRevision: number }) {
   const [runs, setRuns] = useState<PseudoLabelRun[]>([]);
   const [augmentationRuns, setAugmentationRuns] = useState<AugmentationRun[]>([]);
+  const [openDataImports, setOpenDataImports] = useState<OpenDataImport[]>([]);
+  const [selectedOpenDataImportId, setSelectedOpenDataImportId] = useState("");
   const [selectedRunId, setSelectedRunId] = useState("");
   const [selectedAugmentationRunId, setSelectedAugmentationRunId] = useState("");
   const [splits, setSplits] = useState<Array<Record<string, unknown>>>([]);
   const [selectedSplitId, setSelectedSplitId] = useState("");
   const [samples, setSamples] = useState<SplitSamples>({ train: [], valid: [], test: [] });
   const [sampleLimit, setSampleLimit] = useState(3);
+  const [sampleSeed, setSampleSeed] = useState(() => Math.floor(Math.random() * 1_000_000));
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
   const [loadingBuilds, setLoadingBuilds] = useState(false);
   const [loadingSamples, setLoadingSamples] = useState(false);
   const [trainRatio, setTrainRatio] = useState("0.80");
@@ -1529,10 +1925,11 @@ function SplitPage({ project, jobs, refreshJobs, t, artifactRevision }: { projec
   async function loadSplits(nextSelectedId?: string) {
     const nextSplits = await api.datasetSplits(project.id);
     setSplits(nextSplits);
-    const nextId = nextSelectedId || String(nextSplits[0]?.id ?? "");
+    const currentSplit = nextSplits.find((split) => split.is_current !== false) ?? nextSplits[0];
+    const nextId = nextSelectedId || String(currentSplit?.id ?? "");
     setSelectedSplitId(nextId);
     if (nextId) {
-      setSamples(await api.datasetSplitSamples(project.id, nextId, sampleLimit));
+      setSamples(await api.datasetSplitSamples(project.id, nextId, sampleLimit, sampleSeed));
     } else {
       setSamples({ train: [], valid: [], test: [] });
     }
@@ -1541,17 +1938,20 @@ function SplitPage({ project, jobs, refreshJobs, t, artifactRevision }: { projec
   async function loadBuildInputs(preferLatestAugment: boolean) {
     setLoadingBuilds(true);
     try {
-      const [nextRuns, nextAugmentationRuns, nextSplits] = await Promise.all([api.pseudoLabelRuns(project.id), api.augmentationRuns(project.id), api.datasetSplits(project.id)]);
+      const [nextRuns, nextAugmentationRuns, nextSplits, nextOpenDataImports] = await Promise.all([api.pseudoLabelRuns(project.id), api.augmentationRuns(project.id), api.datasetSplits(project.id), api.openDataImports(project.id)]);
       setRuns(nextRuns as PseudoLabelRun[]);
       setAugmentationRuns(nextAugmentationRuns as AugmentationRun[]);
       setSplits(nextSplits);
+      setOpenDataImports(nextOpenDataImports);
+      setSelectedOpenDataImportId((current) => current && nextOpenDataImports.some((item) => item.id === current) ? current : nextOpenDataImports.find((item) => item.status === "active")?.id ?? "");
       setSelectedRunId((current) => chooseLatestBuildSelection(current, nextRuns, false));
-      setSelectedAugmentationRunId((current) => chooseLatestBuildSelection(current, nextAugmentationRuns, preferLatestAugment));
-      const nextSplitId = String(nextSplits[0]?.id ?? "");
+      const currentAugmentationRuns = nextAugmentationRuns.filter((run) => !run.outdated);
+      setSelectedAugmentationRunId((current) => chooseLatestBuildSelection(current, currentAugmentationRuns, preferLatestAugment));
+      const nextSplitId = String((nextSplits.find((split) => split.is_current !== false) ?? nextSplits[0])?.id ?? "");
       setSelectedSplitId(nextSplitId);
       if (nextSplitId) {
         setLoadingSamples(true);
-        setSamples(await api.datasetSplitSamples(project.id, nextSplitId, sampleLimit));
+        setSamples(await api.datasetSplitSamples(project.id, nextSplitId, sampleLimit, sampleSeed));
       }
     } finally {
       setLoadingSamples(false);
@@ -1571,45 +1971,60 @@ function SplitPage({ project, jobs, refreshJobs, t, artifactRevision }: { projec
   useEffect(() => {
     if (!selectedSplitId) return;
     setLoadingSamples(true);
-    api.datasetSplitSamples(project.id, selectedSplitId, sampleLimit).then(setSamples).catch(console.error).finally(() => setLoadingSamples(false));
-  }, [project.id, selectedSplitId, sampleLimit]);
+    api.datasetSplitSamples(project.id, selectedSplitId, sampleLimit, sampleSeed).then(setSamples).catch(console.error).finally(() => setLoadingSamples(false));
+  }, [project.id, selectedSplitId, sampleLimit, sampleSeed]);
 
   const selectedRun = runs.find((run) => run.id === selectedRunId);
   const selectedAugmentationRun = augmentationRuns.find((run) => run.id === selectedAugmentationRunId);
+  const selectedOpenDataImport = openDataImports.find((item) => item.id === selectedOpenDataImportId) ?? null;
   const selectedSplit = splits.find((split) => String(split.id) === selectedSplitId);
+  const canSubmitSplit = ratiosValid && !selectedAugmentationRun?.outdated;
   return (
     <section className="panel-grid">
       <form
         className="panel wide"
         onSubmit={async (event) => {
           event.preventDefault();
+          if (selectedAugmentationRun?.outdated) {
+            setSubmitError("This Augment/source build is outdated. Rebuild Augment before creating a split.");
+            return;
+          }
+          setSubmitError("");
           setSubmitting(true);
           try {
-            const form = new FormData(event.currentTarget);
             if (!ratiosValid) throw new Error("Train + validation must be <= 1.0 so test can fill the remainder.");
             await api.split(project.id, {
-              name: form.get("name"),
+              // Keep prior materialized splits immutable for an already-running training job.
+              name: versionedBuildName("Split", splits.map((split) => String(split.name ?? ""))),
               train_ratio: trainRatioNumber,
               val_ratio: valRatioNumber,
               test_ratio: Number(computedTestRatio.toFixed(4)),
               pseudo_label_run_id: selectedRunId || selectedAugmentationRun?.pseudo_label_run_id || null,
-              augmentation_run_id: selectedAugmentationRunId || null
+              augmentation_run_id: selectedAugmentationRunId || null,
+              open_data_import_id: selectedOpenDataImportId || null
             });
             await refreshJobs();
             await loadSplits();
+          } catch (error) {
+            setSubmitError(error instanceof Error ? error.message : String(error));
           } finally {
             setSubmitting(false);
           }
         }}
       >
-        <h2>{t("buildSplit")}</h2>
-        <p className="muted">Split chooses images from a selected pseudo-label run. Train is the learning set, validation checks performance during training, and test is held out for final spot checks.</p>
+        <h2>Build New Split Version</h2>
+        <p className="muted">Creates an immutable dataset version from the selected Pseudo, Augment, and optional Open Data versions.</p>
         {loadingBuilds ? <p className="inline-feedback"><LoaderCircle className="spin" size={15} /> Syncing latest upstream builds…</p> : null}
-        <label><span>Pseudo-label run / source condition</span><select value={selectedRunId} disabled={loadingBuilds} onChange={(event) => setSelectedRunId(event.target.value)}><option value="">All currently labeled images</option>{runs.map((run) => <option key={run.id} value={run.id}>{run.schema_name ?? run.id} · {run.created_at} · {run.labeled_count}/{run.image_count} images</option>)}</select></label>
+        <label><span>Pseudo version</span><select value={selectedRunId} disabled={loadingBuilds} onChange={(event) => setSelectedRunId(event.target.value)}><option value="">[Pseudo · All project labels]</option>{runs.map((run) => <option key={run.id} value={run.id}>[Pseudo · {pseudoBuildName(run)} · {Number(run.labeled_count ?? 0).toLocaleString()} labeled] · {String(run.created_at ?? "").replace("T", " ").slice(0, 19)}</option>)}</select></label>
         {selectedRun && <p className="muted">Using conf={String(selectedRun.confidence)}, iou={String(selectedRun.iou)}, merge rate={((Number(selectedRun.merge_rate) || 0) * 100).toFixed(1)}%.</p>}
-        <label><span>Augment/source build</span><select value={selectedAugmentationRunId} disabled={loadingBuilds} onChange={(event) => setSelectedAugmentationRunId(event.target.value)}><option value="">No augment build: all matching labeled images</option>{augmentationRuns.map((run) => <option key={run.id} value={run.id}>{augmentationRunLabel(run, runs)}</option>)}</select></label>
+        <label><span>Augment version</span><select value={selectedAugmentationRunId} disabled={loadingBuilds} onChange={(event) => { setSelectedAugmentationRunId(event.target.value); setSubmitError(""); }}><option value="">[Augment · None · use matching labeled images]</option>{augmentationRuns.map((run) => <option key={run.id} value={run.id} disabled={Boolean(run.outdated)}>[Augment · {augmentationBuildName(run)} · {Number(run.created_image_count ?? 0).toLocaleString()} images]{run.outdated ? " · Outdated — rebuild required" : ""}</option>)}</select></label>
         <AugmentationBuildSummary run={selectedAugmentationRun} pseudoRuns={runs} />
-        <input name="name" defaultValue="default" />
+        <label><span>Open Data version</span><select value={selectedOpenDataImportId} disabled={loadingBuilds} onChange={(event) => setSelectedOpenDataImportId(event.target.value)}><option value="">[Open Data · None]</option>{openDataImports.map((item) => <option key={item.id} value={item.id}>[Open Data · {openDataVersionName(item)} · {item.selected_image_count.toLocaleString()} images]{item.status === "active" ? " · Active in Review" : " · Saved"}</option>)}</select></label>
+        <section className="lineage-preview" aria-label="New split source recipe">
+          <div><strong>New Split recipe</strong><span>Only the explicitly selected Open Data version is included.</span></div>
+          <DatasetLineageChain pseudoRun={selectedRun} augmentationRun={selectedAugmentationRun} openDataImport={selectedOpenDataImport} />
+        </section>
+        {submitError ? <p className="review-error" role="alert">{submitError}</p> : null}
         <div className="ratio-builder" aria-label="Train validation test split ratios">
           <div className="ratio-presets" aria-label="Split ratio presets">
             <button type="button" className="secondary action-browse" onClick={() => { setTrainRatio("0.80"); setValRatio("0.10"); }}>80 / 10 / 10</button>
@@ -1628,18 +2043,18 @@ function SplitPage({ project, jobs, refreshJobs, t, artifactRevision }: { projec
           </div>
           <p className={ratiosValid ? "inline-feedback" : "review-error"}>{ratiosValid ? `Total = 1.00. Test automatically fills the remaining ${computedTestRatio.toFixed(2)}.` : "Invalid split: Train + Validation cannot exceed 1.00."}</p>
         </div>
-        <ProcessingButton busy={submitting || isActiveJob(splitJob)} disabled={!ratiosValid} progress={splitJob ? splitJob.progress : submitting ? 15 : undefined} statusText={splitJob ? splitJob.message || `${splitJob.name}: ${splitJob.status}` : "Submitting split build…"} className="primary action-process">{t("buildSplit")}</ProcessingButton>
+        <ProcessingButton busy={submitting || isActiveJob(splitJob)} jobId={isActiveJob(splitJob) ? splitJob?.id : undefined} disabled={!canSubmitSplit} progress={splitJob ? splitJob.progress : submitting ? 15 : undefined} statusText={splitJob ? splitJob.message || `${splitJob.name}: ${splitJob.status}` : "Building Split version…"} className="primary action-process">Build New Split Version</ProcessingButton>
       </form>
       <div className="list-panel wide">
-        <h2>Split history / sample</h2>
+        <div className="sidebar-header"><div><h2>Split history / sample</h2><p className="muted">Random visual check only; rerolling does not change the saved Split.</p></div><button type="button" className="secondary icon-action" aria-label="Reroll Split samples" title="Reroll random preview samples" onClick={() => setSampleSeed((current) => current + 1)}><Dice5 size={18} />Random sample</button></div>
         <div className="field-row">
-          <label><span>Preview split</span><select value={selectedSplitId} onChange={(event) => setSelectedSplitId(event.target.value)}><option value="">No split selected</option>{splits.map((split) => <option key={String(split.id)} value={String(split.id)}>{String(split.name)} · {String(split.created_at ?? "")}</option>)}</select></label>
+          <label><span>Preview Split version</span><select value={selectedSplitId} onChange={(event) => setSelectedSplitId(event.target.value)}><option value="">No Split version selected</option>{splits.map((split) => <option key={String(split.id)} value={String(split.id)}>{datasetSplitOptionLabel(split, runs, augmentationRuns, openDataImports)}</option>)}</select></label>
           <label title="How many images to sample from each train/valid/test bucket."><span>Samples per bucket</span><input type="number" min="1" max="12" value={sampleLimit} onChange={(event) => setSampleLimit(Number(event.target.value))} /></label>
         </div>
-        {selectedSplit && <p className="muted">Previewing {datasetSplitLineageLabel(selectedSplit, runs, augmentationRuns)} · train/val/test={String(selectedSplit.train_ratio)}/{String(selectedSplit.val_ratio)}/{String(selectedSplit.test_ratio)} · {String(selectedSplit.dataset_yaml_path)}</p>}
+        {selectedSplit && <><DatasetLineageChain split={selectedSplit} pseudoRun={runs.find((run) => run.id === selectedSplit.pseudo_label_run_id)} augmentationRun={augmentationRuns.find((run) => run.id === selectedSplit.augmentation_run_id)} openDataImport={openDataImports} /><p className="muted">train/val/test={String(selectedSplit.train_ratio)}/{String(selectedSplit.val_ratio)}/{String(selectedSplit.test_ratio)} · {String(selectedSplit.dataset_yaml_path)}</p></>}
         {loadingSamples ? <p className="inline-feedback"><LoaderCircle className="spin" size={15} /> Rendering split sample boxes…</p> : null}
         <SplitSamplePreview samples={samples} />
-        {splits.map((split) => <article key={String(split.id)} className="row-card"><strong>{String(split.name)}</strong><span>{datasetSplitLineageLabel(split, runs, augmentationRuns)} · {String(split.dataset_yaml_path)} · train/val/test={String(split.train_ratio)}/{String(split.val_ratio)}/{String(split.test_ratio)}</span></article>)}
+        <details><summary>Split history / lineage</summary>{splits.map((split) => <article key={String(split.id)} className={`row-card history-row ${split.outdated ? "is-outdated" : ""}`}><div><strong>{split.is_current !== false ? "Current Split" : "Saved Split version"}</strong><DatasetLineageChain split={split} pseudoRun={runs.find((run) => run.id === split.pseudo_label_run_id)} augmentationRun={augmentationRuns.find((run) => run.id === split.augmentation_run_id)} openDataImport={openDataImports} /><span>{String(split.dataset_yaml_path)} · train/val/test={String(split.train_ratio)}/{String(split.val_ratio)}/{String(split.test_ratio)}</span><OutdatedArtifactNotice outdated={Boolean(split.outdated)} reason={typeof split.outdated_reason === "string" ? split.outdated_reason : null} rebuild="Build a new Split version before training." /></div><HistoryDeleteButton projectId={project.id} artifactType="split" artifactId={String(split.id)} label={splitDisplayName(split)} onDeleted={async () => { setSamples({ train: [], valid: [], test: [] }); await loadBuildInputs(false); await refreshJobs(); }} /></article>)}</details>
       </div>
     </section>
   );
@@ -1689,7 +2104,10 @@ function SplitSampleCard({ sample }: { sample: SplitSample }) {
 export function parseTrainingMetrics(run?: TrainingRun | null): TrainingMetric[] {
   if (!run?.metrics_json) return [];
   try {
-    const parsed = JSON.parse(run.metrics_json);
+    // Older Python json.dumps output may contain non-standard NaN/Infinity tokens.
+    // Ignore those fields while preserving the finite training-loss series.
+    const normalized = run.metrics_json.replace(/\bNaN\b/g, "null").replace(/\b-Infinity\b|\bInfinity\b/g, "null");
+    const parsed = JSON.parse(normalized);
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
@@ -1801,37 +2219,51 @@ export function TrainingRunSummary({ run }: { run?: TrainingRun | null }) {
   );
 }
 
-function TrainPage({ project, models, jobs, refreshJobs, t, artifactRevision }: { project: Project; models: ModelLists; jobs: Job[]; refreshJobs: () => Promise<void>; t: (key: string) => string; artifactRevision: number }) {
-  const [splits, setSplits] = useState<Array<Record<string, unknown>>>([]);
+export function TrainPage({ project, models, jobs, refreshJobs, t, artifactRevision, onGoToSplit }: { project: Project; models: ModelLists; jobs: Job[]; refreshJobs: () => Promise<void>; t: (key: string) => string; artifactRevision: number; onGoToSplit?: () => void }) {
+  const [splits, setSplits] = useState<DatasetSplitRun[]>([]);
   const [pseudoRuns, setPseudoRuns] = useState<PseudoLabelRun[]>([]);
   const [augmentationRuns, setAugmentationRuns] = useState<AugmentationRun[]>([]);
+  const [openDataImports, setOpenDataImports] = useState<OpenDataImport[]>([]);
   const [trainingRuns, setTrainingRuns] = useState<TrainingRun[]>([]);
   const [splitId, setSplitId] = useState("");
   const [inputModel, setInputModel] = useState("");
-  const [runName, setRunName] = useState(() => `Train_${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}_v001`);
+  const [draft, setDraft] = useState({ epochs: "100", imgsz: "640", batch: "16", device: "cuda", patience: "10", optimizer: "SGD", lr0: "0.01", lrf: "0.01" });
+  const [submittedConfig, setSubmittedConfig] = useState<Record<string, string | number | boolean> | null>(null);
+  const [runName, setRunName] = useState(() => versionedBuildName("Train"));
   const [submitting, setSubmitting] = useState(false);
   const [loadingInputs, setLoadingInputs] = useState(false);
+  const [submitError, setSubmitError] = useState("");
   async function loadTrainingContext() {
     setLoadingInputs(true);
     try {
-      const [items, nextPseudoRuns, nextAugmentationRuns, nextTrainingRuns] = await Promise.all([api.datasetSplits(project.id), api.pseudoLabelRuns(project.id), api.augmentationRuns(project.id), api.trainingRuns(project.id)]);
+      const [items, nextPseudoRuns, nextAugmentationRuns, nextTrainingRuns, nextOpenDataImports] = await Promise.all([api.datasetSplits(project.id), api.pseudoLabelRuns(project.id), api.augmentationRuns(project.id), api.trainingRuns(project.id), api.openDataImports(project.id)]);
       setSplits(items);
       setPseudoRuns(nextPseudoRuns);
       setAugmentationRuns(nextAugmentationRuns);
       setTrainingRuns(nextTrainingRuns);
-      if (items[0]?.id) setSplitId((current) => current || String(items[0].id));
+      setOpenDataImports(nextOpenDataImports);
+      const usableSplits = items.filter((split) => !split.outdated);
+      setSplitId((current) => (
+        current && usableSplits.some((split) => split.id === current)
+          ? current
+          : usableSplits.find((split) => split.is_current !== false)?.id ?? usableSplits[0]?.id ?? ""
+      ));
+      return nextTrainingRuns;
     } finally {
       setLoadingInputs(false);
     }
   }
   useEffect(() => {
-    setRunName(`Train_${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}_v001`);
+    setRunName(versionedBuildName("Train"));
     setSplitId("");
-    loadTrainingContext().catch(console.error);
+    setSubmittedConfig(null);
+    loadTrainingContext().then((nextRuns) => {
+      setRunName(versionedBuildName("Train", nextRuns.map((run) => run.run_name || "")));
+    }).catch(console.error);
   }, [project.id]);
   useEffect(() => {
-    setInputModel(models.input_models[0] ?? "yolov8n.pt");
-  }, [models.input_models]);
+    setInputModel((current) => current && models.input_models.includes(current) ? current : models.input_models[0] ?? "yolov8n.pt");
+  }, [models.input_models.join("\u0000")]);
   const trainingJob = findWorkflowJob(jobs, "training");
   useEffect(() => {
     if (trainingJob) {
@@ -1846,78 +2278,80 @@ function TrainPage({ project, models, jobs, refreshJobs, t, artifactRevision }: 
     });
   }, [artifactRevision]);
   const selectedSplit = splits.find((split) => String(split.id) === splitId);
+  const canSubmitTraining = Boolean(selectedSplit && !selectedSplit.outdated);
   const selectedOrLatestRun = trainingRuns.find((run) => run.job_id === trainingJob?.id) ?? trainingRuns[0] ?? null;
+  const persistedConfig = selectedOrLatestRun?.settings && Object.keys(selectedOrLatestRun.settings).length ? selectedOrLatestRun.settings : null;
+  const visibleConfig = (submittedConfig ?? persistedConfig) as Record<string, string | number | boolean> | null;
   return (
     <form
       className="panel"
       onSubmit={async (event) => {
         event.preventDefault();
+        if (!selectedSplit || selectedSplit.outdated) {
+          setSubmitError("No usable Split version is selected. Build a new Split version before training.");
+          return;
+        }
+        setSubmitError("");
         setSubmitting(true);
         try {
-          const form = new FormData(event.currentTarget);
-          await api.train(project.id, {
+          const payload = {
             run_name: runName,
             dataset_split_id: splitId,
             input_model: inputModel,
-            epochs: Number(form.get("epochs")),
-            imgsz: Number(form.get("imgsz")),
-            batch: Number(form.get("batch")),
-            device: form.get("device"),
-            patience: Number(form.get("patience")),
-            optimizer: form.get("optimizer"),
-            lr0: Number(form.get("lr0")),
-            lrf: Number(form.get("lrf"))
-          });
+            epochs: Number(draft.epochs),
+            imgsz: Number(draft.imgsz),
+            batch: Number(draft.batch),
+            device: draft.device,
+            patience: Number(draft.patience),
+            optimizer: draft.optimizer,
+            lr0: Number(draft.lr0),
+            lrf: Number(draft.lrf)
+          };
+          await api.train(project.id, payload);
+          setSubmittedConfig({ ...payload, split: datasetSplitOptionLabel(selectedSplit, pseudoRuns, augmentationRuns, openDataImports) });
           await refreshJobs();
           await loadTrainingContext();
+        } catch (error) {
+          setSubmitError(error instanceof Error ? error.message : String(error));
         } finally {
           setSubmitting(false);
         }
       }}
     >
       <h2>{t("train")}</h2>
-      <p className="muted">Train uses the selected split dataset.yaml. Every numeric/control below has a direct meaning; hover labels for detail.</p>
+      <p className="muted">Choose the exact Split version to train. Versions marked outdated stay visible in Split history but cannot be trained.</p>
       <label title="Training build name shown later in Validate and Model Convert selectors."><span>Training run name</span><input value={runName} onChange={(event) => setRunName(event.target.value)} /></label>
       {loadingInputs ? <p className="inline-feedback"><LoaderCircle className="spin" size={15} /> Syncing latest split/model inputs…</p> : null}
-      <label title="Dataset split YAML created from Split. This decides train/validation/test images and class names."><span>Dataset split</span><select value={splitId} disabled={loadingInputs} onChange={(event) => setSplitId(event.target.value)}>
-        {splits.map((split) => (
-          <option key={String(split.id)} value={String(split.id)}>
-            {datasetSplitLineageLabel(split, pseudoRuns, augmentationRuns)}
-          </option>
-        ))}
-      </select></label>
-      <TrainingInputSummary split={selectedSplit} pseudoRuns={pseudoRuns} augmentationRuns={augmentationRuns} />
+      <label><span>Split version</span><select value={splitId} disabled={loadingInputs} onChange={(event) => setSplitId(event.target.value)}><option value="">No usable Split version</option>{splits.filter((split) => !split.outdated).map((split) => <option key={split.id} value={split.id}>{datasetSplitOptionLabel(split, pseudoRuns, augmentationRuns, openDataImports)}{split.is_current !== false ? " · Current" : " · Saved"}</option>)}</select></label>
+      {!canSubmitTraining ? <div className="outdated-training-block"><span>Project data changed or no usable Split version exists. Build a new Split version before training.</span>{onGoToSplit ? <button type="button" className="secondary" onClick={onGoToSplit}>Go to Split</button> : null}</div> : null}
+      {submitError ? <p className="review-error" role="alert">{submitError}</p> : null}
+      <TrainingInputSummary split={selectedSplit} pseudoRuns={pseudoRuns} augmentationRuns={augmentationRuns} openDataImport={openDataImports} />
       <label title="Starting YOLO weights. Use a pretrained input model for fine-tuning or an output model for continued training."><span>Input model</span><select value={inputModel} onChange={(event) => setInputModel(event.target.value)}>
         {(models.input_models.length ? models.input_models : ["yolov8n.pt"]).map((model) => (
           <option key={model}>{model}</option>
         ))}
       </select></label>
+      <p className="muted">Local Ultralytics Detect checkpoints in input_model are architecture-driven: YOLOv8, YOLO11, YOLO12, and YOLO26 can use the same Train flow when the installed runtime supports that checkpoint. NMS-free heads are handled inside Ultralytics.</p>
       <div className="field-row">
-        <label title="Epochs: complete passes through all training images. More can improve learning but increases overfitting/time."><span>Epochs</span><input name="epochs" type="number" min="1" defaultValue="100" /></label>
-        <label title="imgsz: square input resize used by YOLO, e.g. 640 means 640×640. Larger keeps details but uses more VRAM."><span>Image size</span><input name="imgsz" type="number" min="1" defaultValue="640" /></label>
-        <label title="Batch: images per optimizer step. Larger is faster but needs more GPU memory."><span>Batch</span><input name="batch" type="number" min="1" defaultValue="16" /></label>
-      </div>
-      <div className="field-row">
-        <label title="Device: cuda uses NVIDIA GPU; cpu is slower but useful for debugging."><span>Device</span><select name="device" defaultValue="cuda"><option>cuda</option><option>cpu</option></select></label>
-        <label title="Patience: early stop after this many validation epochs without improvement."><span>Patience</span><input name="patience" type="number" min="1" defaultValue="10" /></label>
-        <label title="Optimizer: SGD is stable/default; Adam/AdamW may converge faster but can need LR tuning."><span>Optimizer</span><select name="optimizer" defaultValue="SGD"><option>SGD</option><option>Adam</option><option>AdamW</option></select></label>
+        <label title="Epochs: complete passes through all training images. More can improve learning but increases overfitting/time."><span>Epochs</span><input name="epochs" type="number" min="1" value={draft.epochs} onChange={(event) => setDraft((current) => ({ ...current, epochs: event.target.value }))} /></label>
+        <label title="imgsz: square input resize used by YOLO, e.g. 640 means 640×640. Larger keeps details but uses more VRAM."><span>Image size</span><input name="imgsz" type="number" min="1" value={draft.imgsz} onChange={(event) => setDraft((current) => ({ ...current, imgsz: event.target.value }))} /></label>
+        <label title="Batch: images per optimizer step. Larger is faster but needs more GPU memory."><span>Batch</span><input name="batch" type="number" min="1" value={draft.batch} onChange={(event) => setDraft((current) => ({ ...current, batch: event.target.value }))} /></label>
       </div>
       <div className="field-row">
-        <label title="lr0: initial learning rate. 0.01 is common for SGD; too high diverges, too low learns slowly."><span>Initial LR</span><input name="lr0" type="number" min="0" step="0.001" defaultValue="0.01" /></label>
-        <label title="lrf: final LR factor for the scheduler. 0.01 means decay to 1% of initial LR by the end."><span>Final LR factor</span><input name="lrf" type="number" min="0" step="0.001" defaultValue="0.01" /></label>
+        <label title="Device: cuda uses NVIDIA GPU; cpu is slower but useful for debugging."><span>Device</span><select name="device" value={draft.device} onChange={(event) => setDraft((current) => ({ ...current, device: event.target.value }))}><option>cuda</option><option>cpu</option></select></label>
+        <label title="Patience: early stop after this many validation epochs without improvement."><span>Patience</span><input name="patience" type="number" min="1" value={draft.patience} onChange={(event) => setDraft((current) => ({ ...current, patience: event.target.value }))} /></label>
+        <label title="Optimizer: SGD is the stable default. MuSGD is a Muon + SGD hybrid intended for YOLO26 and longer/larger training runs; results still depend on the dataset and settings. Adam/AdamW may converge faster but can need LR tuning."><span>Optimizer</span><select name="optimizer" value={draft.optimizer} onChange={(event) => setDraft((current) => ({ ...current, optimizer: event.target.value }))}><option>SGD</option><option>MuSGD</option><option>Adam</option><option>AdamW</option></select></label>
       </div>
-      <div className="param-help-grid">
-        <ParameterHelp name="100 epochs" value="time/overfit" help="How many full passes over the training set." />
-        <ParameterHelp name="640 imgsz" value="detail/VRAM" help="Resize size for YOLO input; larger can detect smaller objects." />
-        <ParameterHelp name="16 batch" value="VRAM" help="Images per step; reduce if CUDA out-of-memory occurs." />
-        <ParameterHelp name="cuda" value="GPU" help="Use AGX GPU acceleration for training." />
-        <ParameterHelp name="SGD / 0.01" value="optimizer/LR" help="How weights are updated and initial update size." />
+      <div className="field-row">
+        <label title="lr0: initial learning rate. 0.01 is common for SGD; too high diverges, too low learns slowly."><span>Initial LR</span><input name="lr0" type="number" min="0" step="0.001" value={draft.lr0} onChange={(event) => setDraft((current) => ({ ...current, lr0: event.target.value }))} /></label>
+        <label title="lrf: final LR factor for the scheduler. 0.01 means decay to 1% of initial LR by the end."><span>Final LR factor</span><input name="lrf" type="number" min="0" step="0.001" value={draft.lrf} onChange={(event) => setDraft((current) => ({ ...current, lrf: event.target.value }))} /></label>
       </div>
+      {visibleConfig ? <section className="submitted-training-config" aria-label="Submitted training configuration"><div className="sidebar-header"><div><h3>Submitted training configuration</h3><p className="muted">This is the exact request retained for the current/latest run.</p></div><span className="open-data-ready">Locked</span></div><dl><div><dt>Training run</dt><dd>{String(visibleConfig.run_name ?? selectedOrLatestRun?.run_name ?? "—")}</dd></div><div><dt>Dataset Split</dt><dd>{String(visibleConfig.split ?? selectedOrLatestRun?.dataset_split_id ?? "—")}</dd></div><div><dt>Input model</dt><dd>{String(visibleConfig.input_model ?? selectedOrLatestRun?.input_model ?? inputModel)}</dd></div><div><dt>Optimizer</dt><dd>{String(visibleConfig.optimizer ?? "—")}</dd></div><div><dt>Epochs / image / batch</dt><dd>{String(visibleConfig.epochs ?? "—")} / {String(visibleConfig.imgsz ?? "—")} / {String(visibleConfig.batch ?? "—")}</dd></div><div><dt>Device / patience</dt><dd>{String(visibleConfig.device ?? "—")} / {String(visibleConfig.patience ?? "—")}</dd></div><div><dt>LR initial / final factor</dt><dd>{String(visibleConfig.lr0 ?? "—")} / {String(visibleConfig.lrf ?? "—")}</dd></div></dl></section> : null}
       {trainingJob && <div className="job-progress-inline" title={trainingJob.message}><span>{trainingJob.name}: {trainingJob.status}</span><progress value={trainingJob.progress} max={100} /><small>{trainingJob.progress}% · {trainingJob.message}</small></div>}
       <TrainingLossChart run={selectedOrLatestRun} />
       <TrainingRunSummary run={selectedOrLatestRun} />
-      {trainingRuns.length ? <section className="build-summary"><h3>Training history</h3><div className="version-list">{trainingRuns.map((run) => <article key={run.id}><strong>{trainingRunDisplayName(run)}</strong><span>{run.status || "unknown"} · {run.save_dir || run.output_dir || "waiting for save_dir"}</span></article>)}</div></section> : null}
-      <ProcessingButton busy={submitting || isActiveJob(trainingJob)} progress={trainingJob ? trainingJob.progress : submitting ? 10 : undefined} statusText={trainingJob ? trainingJob.message || `${trainingJob.name}: ${trainingJob.status}` : "Submitting training run…"} className="primary action-process"><Play size={17} />{t("train")}</ProcessingButton>
+      {trainingRuns.length ? <section className="build-summary"><h3>Training history</h3><div className="version-list">{trainingRuns.map((run) => <article className="history-row" key={run.id}><div><strong>{trainingRunDisplayName(run)}</strong><span>{run.status || "unknown"} · {run.save_dir || run.output_dir || "waiting for save_dir"}</span></div><HistoryDeleteButton projectId={project.id} artifactType="training" artifactId={run.id} label={trainingRunDisplayName(run)} disabled={["queued", "running"].includes(run.status ?? "")} onDeleted={async () => { setSubmittedConfig(null); await loadTrainingContext(); await refreshJobs(); }} /></article>)}</div></section> : null}
+      <ProcessingButton busy={submitting || isActiveJob(trainingJob)} jobId={isActiveJob(trainingJob) ? trainingJob?.id : undefined} disabled={!canSubmitTraining} progress={trainingJob ? trainingJob.progress : submitting ? 10 : undefined} statusText={trainingJob ? trainingJob.message || `${trainingJob.name}: ${trainingJob.status}` : "Submitting training run…"} className="primary action-process"><Play size={17} />{t("train")}</ProcessingButton>
     </form>
   );
 }
@@ -1926,12 +2360,15 @@ export function ParameterHelp({ name, value, help }: { name: string; value: stri
   return <article className="param-help" title={help}><strong>{name}</strong><span>{value}</span><p>{help}</p></article>;
 }
 
-export function ValidationRandomButton({ loading, onClick }: { loading: boolean; onClick: () => void }) {
+export function ValidationRandomButton({ loading, sampleCount = 1, onSampleCountChange = () => undefined, onClick, disabled = false }: { loading: boolean; sampleCount?: number; onSampleCountChange?: (count: number) => void; onClick: () => void; disabled?: boolean }) {
   return (
-    <button type="button" className="primary action-validate" onClick={onClick} disabled={loading} title="Random sample: choose one image from the selected folder and rerun inference">
-      {loading ? <LoaderCircle size={18} className="spin" /> : <Dice5 size={18} />}
-      {loading ? "Running inference…" : "Random sample"}
-    </button>
+    <div className="validation-sample-controls">
+      <label><span>Sample count</span><input type="number" min="1" max="12" step="1" value={sampleCount} disabled={loading} onChange={(event) => onSampleCountChange(Math.max(1, Math.min(12, Number(event.target.value) || 1)))} /></label>
+      <button type="button" className="primary action-validate" onClick={onClick} disabled={loading || disabled} title="Random sample: choose images from the selected folder and rerun inference">
+        {loading ? <LoaderCircle size={18} className="spin" /> : <Dice5 size={18} />}
+        {loading ? "Running inference…" : "Random sample"}
+      </button>
+    </div>
   );
 }
 
@@ -1940,9 +2377,10 @@ function ValidationPage({ project, models, artifactRevision }: { project: Projec
   const [modelSources, setModelSources] = useState<ModelSource[]>([]);
   const [schemaId, setSchemaId] = useState("");
   const [modelName, setModelName] = useState("");
-  const [folderPath, setFolderPath] = useState("/home/a0665x/Desktop/AI_AGX_WS/autolabel/0629");
+  const [folderPath, setFolderPath] = useState("");
+  const [sampleCount, setSampleCount] = useState(1);
   const [showBrowser, setShowBrowser] = useState(false);
-  const [result, setResult] = useState<ValidationPreviewResult | null>(null);
+  const [results, setResults] = useState<ValidationPreviewResult[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -1962,9 +2400,13 @@ function ValidationPage({ project, models, artifactRevision }: { project: Projec
   useEffect(() => { if (!modelName) setModelName(modelSources[0]?.path ?? models.output_models[0] ?? models.input_models[0] ?? "yolov8n.pt"); }, [modelName, modelSources, models.output_models, models.input_models]);
   async function runRandomInference() {
     setError("");
+    if (!folderPath.trim()) {
+      setError("Choose or enter a validation image folder first.");
+      return;
+    }
     setLoading(true);
     try {
-      setResult(await api.validationPreview(project.id, { model_name: modelName, schema_id: schemaId || null, folder_path: folderPath, confidence: 0.25, iou: 0.7 }));
+      setResults(await api.validationPreview(project.id, { model_name: modelName, schema_id: schemaId || null, folder_path: folderPath, sample_count: sampleCount, confidence: 0.25, iou: 0.7 }));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1973,7 +2415,7 @@ function ValidationPage({ project, models, artifactRevision }: { project: Projec
   }
   const selectedSchema = schemas.find((schema) => schema.id === schemaId);
   const fallbackModels = [...models.output_models, ...models.input_models];
-  return <section className="panel-grid"><div className="panel wide">{showBrowser && <FileManagerDialog mode="image_folder" initialPath={folderPath} onClose={() => setShowBrowser(false)} onSelect={(path) => { setFolderPath(path); setShowBrowser(false); }} />}<div className="sidebar-header"><div><h2>Validate / random inference</h2><p className="muted">Choose a model and class schema, then sample one image from a folder. Random sample picks another image and runs inference again.</p></div><ValidationRandomButton loading={loading} onClick={runRandomInference} /></div>{loadingModels ? <p className="inline-feedback"><LoaderCircle className="spin" size={15} /> Syncing latest project models…</p> : null}<div className="field-row"><label title="Model artifact used for inference. Current project training outputs are listed before global models."><span>Model source</span><select value={modelName} disabled={loadingModels} onChange={(event) => setModelName(event.target.value)}>{modelSources.map((source) => <option key={source.id} value={source.path}>{source.label}</option>)}{fallbackModels.length ? <optgroup label="Global models">{fallbackModels.map((model) => <option key={model} value={model}>{model}</option>)}</optgroup> : null}</select></label><label title="Class schema used to show id/name context next to model outputs."><span>Class schema</span><select value={schemaId} onChange={(event) => setSchemaId(event.target.value)}><option value="">Model native classes</option>{schemas.map((schema) => <option key={schema.id} value={schema.id}>{schema.name}</option>)}</select></label></div><div className="field-row"><input value={folderPath} onChange={(event) => setFolderPath(event.target.value)} /><button type="button" className="secondary action-browse" onClick={() => setShowBrowser(true)}><FolderOpen size={16} />Browse folder</button></div>{selectedSchema && <SchemaHierarchy schema={selectedSchema} />}{error && <p className="review-error">{error}</p>}{result && <InferencePreviewCard result={result} />}</div></section>;
+  return <section className="panel-grid"><div className="panel wide">{showBrowser && <FileManagerDialog mode="image_folder" initialPath={folderPath} onClose={() => setShowBrowser(false)} onSelect={(path) => { setFolderPath(path); setResults([]); setShowBrowser(false); }} />}<div className="sidebar-header"><div><h2>Validate / random inference</h2><p className="muted">Choose a model, class schema, folder, and how many random images to inspect.</p></div><ValidationRandomButton loading={loading} sampleCount={sampleCount} onSampleCountChange={setSampleCount} onClick={runRandomInference} disabled={!folderPath.trim()} /></div>{loadingModels ? <p className="inline-feedback"><LoaderCircle className="spin" size={15} /> Syncing latest project models…</p> : null}<div className="field-row"><label title="Model artifact used for inference. Current project training outputs are listed before global models."><span>Model source</span><select value={modelName} disabled={loadingModels} onChange={(event) => setModelName(event.target.value)}>{modelSources.map((source) => <option key={source.id} value={source.path}>{source.label}</option>)}{fallbackModels.length ? <optgroup label="Global models">{fallbackModels.map((model) => <option key={model} value={model}>{model}</option>)}</optgroup> : null}</select></label><label title="Class schema used to show id/name context next to model outputs."><span>Class schema</span><select value={schemaId} onChange={(event) => setSchemaId(event.target.value)}><option value="">Model native classes</option>{schemas.map((schema) => <option key={schema.id} value={schema.id}>{schema.name}</option>)}</select></label></div><FolderPathField value={folderPath} onChange={(path) => { setFolderPath(path); setResults([]); }} onBrowse={() => setShowBrowser(true)} />{selectedSchema && <SchemaHierarchy schema={selectedSchema} />}{error && <p className="review-error">{error}</p>}{results.length ? <div className="validation-results-grid">{results.map((result) => <InferencePreviewCard key={result.image_path ?? result.file_name} result={result} />)}</div> : null}</div></section>;
 }
 
 export function InferencePreviewCard({ result }: { result: ValidationPreviewResult }) {
@@ -1983,12 +2425,9 @@ export function InferencePreviewCard({ result }: { result: ValidationPreviewResu
 }
 
 const CONVERSION_TARGETS = [
-  { key: "onnx:fp32", format: "onnx", precision: "fp32", label: "FP32" },
-  { key: "onnx:fp16", format: "onnx", precision: "fp16", label: "FP16" },
-  { key: "tflite:fp32", format: "tflite", precision: "fp32", label: "FP32" },
-  { key: "tflite:fp16", format: "tflite", precision: "fp16", label: "FP16" },
-  { key: "tflite:int8", format: "tflite", precision: "int8", label: "INT8" }
-];
+  { key: "onnx:fp32", format: "onnx", precision: "fp32", label: "ONNX FP32" },
+  { key: "tflite:fp32", format: "tflite", precision: "fp32", label: "LiteRT FP32" }
+] as const;
 
 function targetKey(format: string, precision: string) {
   return `${format}:${precision}`;
@@ -2027,20 +2466,18 @@ export function SchemaClassMap({ schema }: { schema?: ClassSchema | null }) {
   );
 }
 
-export function ConversionTargetMatrix({ selected, onToggle }: { selected: string[]; onToggle: (key: string) => void }) {
+export function ConversionTargetMatrix({ selected, onToggle, tfliteLayout = "NCHW", onTfliteLayoutChange = () => {}, disabled = false }: { selected: string[]; onToggle: (key: string) => void; tfliteLayout?: "NCHW" | "NHWC"; onTfliteLayoutChange?: (layout: "NCHW" | "NHWC") => void; disabled?: boolean }) {
   return (
     <div className="conversion-target-matrix">
-      {["onnx", "tflite"].map((format) => (
-        <section key={format}>
-          <strong>{format === "onnx" ? "ONNX" : "TFLite"}</strong>
-          <div>
-            {CONVERSION_TARGETS.filter((target) => target.format === format).map((target) => (
-              <label key={target.key} className="check-row">
-                <input type="checkbox" checked={selected.includes(target.key)} onChange={() => onToggle(target.key)} />
-                {target.label}
-              </label>
-            ))}
-          </div>
+      {CONVERSION_TARGETS.map((target) => (
+        <section key={target.key}>
+          <label className="check-row">
+            <input type="checkbox" checked={selected.includes(target.key)} disabled={disabled} onChange={() => onToggle(target.key)} />
+            <strong>{target.label}</strong>
+          </label>
+          {target.format === "tflite" && selected.includes(target.key) ? (
+            <label><span>Input layout</span><select value={tfliteLayout} disabled={disabled} onChange={(event) => onTfliteLayoutChange(event.target.value as "NCHW" | "NHWC")}><option value="NCHW">NCHW</option><option value="NHWC">NHWC</option></select></label>
+          ) : null}
         </section>
       ))}
     </div>
@@ -2078,7 +2515,7 @@ export function ConversionPackageSummary({
       <div className="artifact-chip-row">
         {conversion.artifacts.map((artifact) => (
           <button key={artifact.id} type="button" className={selectedArtifactId === artifact.id ? "active artifact-chip" : "artifact-chip"} onClick={() => onSelectArtifact(artifact.id)}>
-            {artifact.format} · {artifact.precision} · {artifact.status}
+            {artifact.format} · {artifact.precision} · {artifact.layout ?? "NCHW"} · {artifact.status}
           </button>
         ))}
       </div>
@@ -2095,7 +2532,7 @@ export function ExportPackageSummary({ conversion, selectedArtifactIds, includeN
       {conversion.artifacts.map((artifact) => (
         <label key={artifact.id} className="check-row">
           <input type="checkbox" checked={selectedArtifactIds.includes(artifact.id)} onChange={() => onToggleArtifact(artifact.id)} />
-          {artifact.format} · {artifact.precision}
+          {artifact.format} · {artifact.precision} · {artifact.layout ?? "NCHW"}
         </label>
       ))}
     </div>
@@ -2119,13 +2556,17 @@ export function ModelSourceSelector({ sources, value, onChange }: { sources: Mod
   );
 }
 
-function ModelConvertPage({ project, jobs, refreshJobs }: { project: Project; jobs: Job[]; refreshJobs: () => Promise<void> }) {
+export function ModelConvertPage({ project, jobs, refreshJobs }: { project: Project; jobs: Job[]; refreshJobs: () => Promise<void> }) {
   const [modelSources, setModelSources] = useState<ModelSource[]>([]);
   const [schemas, setSchemas] = useState<ClassSchema[]>([]);
   const [conversions, setConversions] = useState<ModelConversionRun[]>([]);
+  const [capabilities, setCapabilities] = useState<ModelConversionCapability[]>([]);
+  const [capabilitiesLoading, setCapabilitiesLoading] = useState(true);
+  const [capabilityError, setCapabilityError] = useState("");
   const [modelSourceId, setModelSourceId] = useState("");
   const [schemaId, setSchemaId] = useState("");
-  const [selectedTargets, setSelectedTargets] = useState(["onnx:fp32", "tflite:int8"]);
+  const [selectedTargets, setSelectedTargets] = useState(["onnx:fp32", "tflite:fp32"]);
+  const [tfliteLayout, setTfliteLayout] = useState<"NCHW" | "NHWC">("NCHW");
   const [selectedArtifactId, setSelectedArtifactId] = useState("");
   const [netronUrl, setNetronUrl] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -2134,23 +2575,35 @@ function ModelConvertPage({ project, jobs, refreshJobs }: { project: Project; jo
   const conversionJob = findWorkflowJob(jobs, "model_conversion");
   const selectedSchema = schemas.find((schema) => schema.id === schemaId);
   const selectedModelSource = modelSources.find((source) => source.id === modelSourceId);
+  const unavailableReason = capabilities.find((capability) => !capability.available)?.reason ?? capabilityError;
+  const conversionUnavailable = capabilitiesLoading || Boolean(unavailableReason);
 
   async function loadConvertData() {
-    const [sourceModels, classSchemas, conversionRuns] = await Promise.all([
+    setCapabilitiesLoading(true);
+    setCapabilityError("");
+    const [sourceModels, classSchemas, conversionRuns, conversionCapabilities] = await Promise.all([
       api.modelSources(project.id),
       api.classSchemas(project.id),
-      api.modelConversions(project.id)
+      api.modelConversions(project.id),
+      api.modelConversionCapabilities()
     ]);
     setModelSources(sourceModels);
     setSchemas(classSchemas);
     setConversions(conversionRuns);
-    if (!modelSourceId && sourceModels[0]?.id) setModelSourceId(sourceModels[0].id);
-    if (!schemaId && classSchemas[0]?.id) setSchemaId(classSchemas[0].id);
+    setCapabilities(conversionCapabilities);
+    setCapabilitiesLoading(false);
+    setModelSourceId((current) => sourceModels.some((item) => item.id === current) ? current : sourceModels[0]?.id ?? "");
+    setSchemaId((current) => classSchemas.some((item) => item.id === current) ? current : classSchemas[0]?.id ?? "");
     const firstArtifact = conversionRuns[0]?.artifacts[0];
-    if (!selectedArtifactId && firstArtifact) setSelectedArtifactId(firstArtifact.id);
+    setSelectedArtifactId((current) => conversionRuns.some((run) => run.artifacts.some((item) => item.id === current)) ? current : firstArtifact?.id ?? "");
   }
 
-  useEffect(() => { loadConvertData().catch(console.error); }, [project.id]);
+  useEffect(() => {
+    loadConvertData().catch((error) => {
+      setCapabilityError(error instanceof Error ? error.message : String(error));
+      setCapabilitiesLoading(false);
+    });
+  }, [project.id, conversionJob?.id, conversionJob?.status]);
 
   function toggleTarget(key: string) {
     setSelectedTargets((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
@@ -2182,132 +2635,96 @@ function ModelConvertPage({ project, jobs, refreshJobs }: { project: Project; jo
         event.preventDefault();
         setSubmitting(true);
         try {
+          setExportError("");
           await api.createModelConversion(project.id, {
             training_run_id: selectedModelSource?.training_run_id ?? null,
-            source_model_path: selectedModelSource?.path,
+            source_model_path: selectedModelSource?.path ?? "",
             schema_id: schemaId,
-            targets: selectedTargets.map((key) => {
-              const [format, precision] = key.split(":");
-              return { format, precision };
+            targets: selectedTargets.flatMap<ModelConversionTarget>((key) => {
+              const target = CONVERSION_TARGETS.find((candidate) => candidate.key === key);
+              return target ? [{ format: target.format, precision: target.precision, layout: target.format === "tflite" ? tfliteLayout : "NCHW" }] : [];
             }),
-            imgsz: Number(new FormData(event.currentTarget).get("imgsz"))
+            imgsz: Number(new FormData(event.currentTarget).get("imgsz")),
+            opset: Number(new FormData(event.currentTarget).get("opset") ?? 11)
           });
           await refreshJobs();
           await loadConvertData();
+        } catch (err) {
+          setExportError(err instanceof Error ? err.message : String(err));
         } finally {
           setSubmitting(false);
         }
       }}>
-        <h2>Model Convert</h2>
-        <p className="muted">Create one conversion package from any completed PT/PTH model source, selected formats, and an explicit class schema manifest.</p>
+        <h2>Model Convert / Export</h2>
+        <p className="muted">Convert a completed model, inspect artifacts, and download one ZIP with class metadata, training configuration, metrics, and result plots when available.</p>
         <ModelSourceSelector sources={modelSources} value={modelSourceId} onChange={setModelSourceId} />
-        {selectedModelSource && <p className="inline-feedback">{selectedModelSource.scope} · {selectedModelSource.source_type} · {selectedModelSource.relative_path}</p>}
+        {selectedModelSource && <p className="stream-lineage">{selectedModelSource.label}</p>}
         <label><span>Class schema</span><select value={schemaId} onChange={(event) => setSchemaId(event.target.value)}>
           {schemas.map((schema) => <option key={schema.id} value={schema.id}>{schema.name}</option>)}
         </select></label>
         <SchemaClassMap schema={selectedSchema} />
         <label><span>Image size</span><input name="imgsz" type="number" min="1" defaultValue="640" /></label>
-        <ConversionTargetMatrix selected={selectedTargets} onToggle={toggleTarget} />
+        <ConversionTargetMatrix selected={selectedTargets} onToggle={toggleTarget} tfliteLayout={tfliteLayout} onTfliteLayoutChange={setTfliteLayout} disabled={conversionUnavailable} />
+        <label><span>ONNX opset</span><select name="opset" defaultValue="11" disabled={!selectedTargets.some((key) => key.startsWith("onnx"))}>{Array.from({ length: 10 }, (_, i) => i + 11).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+        {exportError && <p className="review-error" role="alert">{exportError}</p>}
+        {conversionJob?.status === "failed" && <p className="review-error" role="alert">{conversionJob.error || conversionJob.message}</p>}
+        {capabilitiesLoading && <p className="inline-feedback">Checking conversion availability…</p>}
+        {unavailableReason && <p className="review-error">{unavailableReason}</p>}
         {conversionJob && <div className="job-progress-inline" title={conversionJob.message}><span>{conversionJob.name}: {conversionJob.status}</span><progress value={conversionJob.progress} max={100} /><small>{conversionJob.progress}% · {conversionJob.message}</small></div>}
-        <ProcessingButton busy={submitting || isActiveJob(conversionJob)} disabled={!selectedModelSource || !schemaId || selectedTargets.length === 0} progress={conversionJob ? conversionJob.progress : submitting ? 10 : undefined} statusText={conversionJob ? conversionJob.message : "Submitting conversion package…"} className="primary action-process"><PackageCheck size={17} />Convert package</ProcessingButton>
+        <ProcessingButton busy={submitting || isActiveJob(conversionJob)} jobId={isActiveJob(conversionJob) ? conversionJob?.id : undefined} disabled={conversionUnavailable || !selectedModelSource || !schemaId || selectedTargets.length === 0} progress={conversionJob ? conversionJob.progress : submitting ? 10 : undefined} statusText={conversionJob ? conversionJob.message : "Submitting conversion package…"} className="primary action-process"><PackageCheck size={17} />Convert package</ProcessingButton>
       </form>
       <section className="panel wide">
         <h2>Conversion packages</h2>
         {conversions.length === 0 && <p className="muted">No conversion package yet.</p>}
-        {exportError && <p className="review-error">{exportError}</p>}
         {conversions.map((conversion) => (
-          <ConversionPackageSummary
-            key={conversion.id}
-            conversion={conversion}
-            selectedArtifactId={selectedArtifactId}
-            onSelectArtifact={(artifactId) => openNetron(conversion, artifactId).catch(console.error)}
-            onExport={() => exportConversion(conversion).catch(console.error)}
-            exporting={exportingConversionId === conversion.id}
-          />
+          <div className="conversion-history-item" key={conversion.id}>
+            <ConversionPackageSummary
+              conversion={conversion}
+              selectedArtifactId={selectedArtifactId}
+              onSelectArtifact={(artifactId) => openNetron(conversion, artifactId).catch(console.error)}
+              onExport={() => exportConversion(conversion).catch(console.error)}
+              exporting={exportingConversionId === conversion.id}
+            />
+            <HistoryDeleteButton projectId={project.id} artifactType="conversion" artifactId={conversion.id} label={conversion.package_name} disabled={["queued", "running"].includes(conversion.status)} onDeleted={async () => { setNetronUrl(""); await loadConvertData(); await refreshJobs(); }} />
+          </div>
         ))}
         <div className="netron-panel">
           {netronUrl ? <iframe title="Netron model graph" src={netronUrl} /> : <p className="muted">Select an artifact to open Netron preview. Mouse wheel zoom and drag are handled by Netron.</p>}
         </div>
       </section>
+      <ExportHistory project={project} revision={exportingConversionId} refreshJobs={refreshJobs} />
     </section>
   );
 }
 
-function ExportPage({ project, jobs, refreshJobs, t }: { project: Project; jobs: Job[]; refreshJobs: () => Promise<void>; t: (key: string) => string }) {
-  const [conversions, setConversions] = useState<ModelConversionRun[]>([]);
-  const [conversionId, setConversionId] = useState("");
-  const [selectedArtifactIds, setSelectedArtifactIds] = useState<string[]>([]);
-  const [includeNativePt, setIncludeNativePt] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const exportJob = findWorkflowJob(jobs, "model_export_bundle") || findWorkflowJob(jobs, "model_export");
-  const selectedConversion = conversions.find((conversion) => conversion.id === conversionId);
-  useEffect(() => {
-    api.modelConversions(project.id).then((items) => {
-      setConversions(items);
-      if (items[0]?.id) {
-        setConversionId(items[0].id);
-        setSelectedArtifactIds(items[0].artifacts.map((artifact) => artifact.id));
-      }
-    });
-  }, [project.id]);
-  function toggleArtifact(artifactId: string) {
-    setSelectedArtifactIds((current) => current.includes(artifactId) ? current.filter((item) => item !== artifactId) : [...current, artifactId]);
-  }
-  return (
-    <form
-      className="panel"
-      onSubmit={async (event) => {
-        event.preventDefault();
-        setSubmitting(true);
-        try {
-          await api.createExportBundle(project.id, {
-            conversion_run_id: conversionId,
-            include_artifact_ids: selectedArtifactIds,
-            include_native_pt: includeNativePt
-          });
-          await refreshJobs();
-        } finally {
-          setSubmitting(false);
-        }
-      }}
-    >
-      <h2>{t("export")}</h2>
-      <p className="muted">Export is tied to a Model Convert package so the native PT, converted artifacts, classes.json, and metadata.json stay together.</p>
-      <select value={conversionId} onChange={(event) => {
-        const nextId = event.target.value;
-        setConversionId(nextId);
-        const next = conversions.find((conversion) => conversion.id === nextId);
-        setSelectedArtifactIds(next ? next.artifacts.map((artifact) => artifact.id) : []);
-      }}>
-        {conversions.map((conversion) => (
-          <option key={conversion.id} value={conversion.id}>
-            {conversion.package_name} · {conversion.status} · {conversion.artifacts.length} artifacts
-          </option>
-        ))}
-      </select>
-      {selectedConversion ? <ExportPackageSummary conversion={selectedConversion} selectedArtifactIds={selectedArtifactIds} includeNativePt={includeNativePt} onToggleArtifact={toggleArtifact} onToggleNative={() => setIncludeNativePt((current) => !current)} /> : <p className="muted">Create a Model Convert package first.</p>}
-      {exportJob && <div className="job-progress-inline" title={exportJob.message}><span>{exportJob.name}: {exportJob.status}</span><progress value={exportJob.progress} max={100} /><small>{exportJob.progress}% · {exportJob.message}</small></div>}
-      <ProcessingButton busy={submitting || isActiveJob(exportJob)} disabled={!conversionId} progress={exportJob ? exportJob.progress : submitting ? 10 : undefined} statusText={exportJob ? exportJob.message || `${exportJob.name}: ${exportJob.status}` : "Submitting export bundle…"} className="primary action-export">{t("export")}</ProcessingButton>
-    </form>
-  );
+function ExportHistory({ project, revision, refreshJobs }: { project: Project; revision: string; refreshJobs: () => Promise<void> }) {
+  const [bundles, setBundles] = useState<ModelExportBundle[]>([]);
+  const [error, setError] = useState("");
+  const load = async () => { setBundles(await api.exportBundles(project.id)); setError(""); };
+  useEffect(() => { let active = true; api.exportBundles(project.id).then((items) => { if (active) setBundles(items); }).catch((err) => { if (active) setError(String(err)); }); return () => { active = false; }; }, [project.id, revision]);
+  return <section className="panel wide"><h2>Export history</h2><p className="muted">Use Export ZIP on a conversion package above. The ZIP includes native and converted models, classes.json, metadata.json, and training/ with args.yaml, saved run configuration, metrics and plots when available.</p>{error && <p className="muted">Export history is temporarily unavailable.</p>}{bundles.length === 0 ? <p className="muted">No export yet.</p> : <div className="version-list">{bundles.map((bundle) => <article className="history-row" key={bundle.id}><div><strong>{bundle.bundle_name}</strong><span>{bundle.status}</span></div><HistoryDeleteButton projectId={project.id} artifactType="export" artifactId={bundle.id} label={bundle.bundle_name} onDeleted={async () => { await load(); await refreshJobs(); }} /></article>)}</div>}</section>;
 }
 
 export function SettingsPage({ models, t, activeProject, context }: { models: ModelLists; t: (key: string) => string; activeProject?: Project; context?: ProjectArtifactContext | null }) {
-  const [pseudoModel, setPseudoModel] = useState(models.world_models[0] ?? "yolov8s-world.pt");
+  const availableWorldModels = supportedWorldModels(models.world_models, models.world_model_details);
+  const [pseudoModel, setPseudoModel] = useState(() => firstSupportedWorldModel(models.world_models, models.world_model_details));
   const [trainModel, setTrainModel] = useState(models.input_models[0] ?? "yolov8n.pt");
   const [augmentDefault, setAugmentDefault] = useState("Skip augment");
   const [splitDefault, setSplitDefault] = useState("80 / 10 / 10");
   const [trainDevice, setTrainDevice] = useState("cuda");
   useEffect(() => {
-    setPseudoModel((current) => current || models.world_models[0] || "yolov8s-world.pt");
+    setPseudoModel((current) => availableWorldModels.includes(current) ? current : availableWorldModels[0] ?? "");
     setTrainModel((current) => current || models.input_models[0] || "yolov8n.pt");
-  }, [models.world_models, models.input_models]);
+  }, [models.world_models, models.world_model_details, models.input_models]);
   return (
     <section className="panel-grid settings-grid">
       <section className="panel wide settings-panel">
         <div className="sidebar-header"><div><h2>Workflow defaults</h2><p className="muted">Defaults used when entering each workflow tab. They keep the project flow explicit without hiding build selectors.</p></div></div>
         <div className="settings-control-grid">
-          <label><span>Pseudo default model</span><select value={pseudoModel} onChange={(event) => setPseudoModel(event.target.value)}>{(models.world_models.length ? models.world_models : ["yolov8s-world.pt"]).map((model) => <option key={model}>{model}</option>)}</select></label>
+          <label><span>Pseudo default model</span><select value={pseudoModel} disabled={!availableWorldModels.length} onChange={(event) => setPseudoModel(event.target.value)}>{availableWorldModels.length ? availableWorldModels.map((model) => {
+            const info = models.world_model_details.find((item) => item.name === model);
+            return <option key={model} value={model}>{info ? worldModelLabel(info) : model}</option>;
+          }) : <option value="">No supported local world models</option>}</select></label>
           <label><span>Train input model</span><select value={trainModel} onChange={(event) => setTrainModel(event.target.value)}>{(models.input_models.length ? models.input_models : ["yolov8n.pt"]).map((model) => <option key={model}>{model}</option>)}</select></label>
           <label><span>Augment default</span><select value={augmentDefault} onChange={(event) => setAugmentDefault(event.target.value)}><option>Skip augment</option><option>x3</option><option>x5</option><option>x8</option><option>x10</option></select></label>
           <label><span>Split ratio preset</span><select value={splitDefault} onChange={(event) => setSplitDefault(event.target.value)}><option>80 / 10 / 10</option><option>70 / 20 / 10</option><option>90 / 5 / 5</option></select></label>
@@ -2331,11 +2748,15 @@ export function SettingsPage({ models, t, activeProject, context }: { models: Mo
         <div className="runtime-mode-grid">
           <article><strong>Desktop x86_64</strong><span>Uses docker-compose.yml and the CUDA PyTorch desktop image. Use `./run.sh --mode desktop` on x86 workstations.</span></article>
           <article><strong>Jetson ARM64</strong><span>Uses docker-compose.jetson.yml and NVIDIA igpu/L4T PyTorch images. Use `./run.sh --mode jetson` on Orin/JetPack systems.</span></article>
+          <article><strong>Private Tailscale HTTPS</strong><span>Use `./run.sh --tailscale-up`; access is for registered tailnet devices only and remains governed by your tailnet policy.</span></article>
         </div>
-        <p className="muted">Run `./run.sh --detect` or `./run.sh --plan desktop` to inspect mode, architecture, compose file, and bind host without changing containers.</p>
+        <p className="muted">Run `./run.sh --detect` or `./run.sh --plan desktop` to inspect runtime details. Use `./run.sh --tailscale-status` to inspect private HTTPS without changing it.</p>
       </section>
 
-      <ModelList title={t("worldModels")} subtitle="YOLO-World weights used by Pseudo." items={models.world_models} />
+      <ModelList title={t("worldModels")} subtitle="Open-vocabulary weights used by Pseudo; Seg checkpoints persist bbox labels only." items={models.world_models.map((name) => {
+        const info = models.world_model_details.find((item) => item.name === name);
+        return info ? worldModelLabel(info) : name;
+      })} />
       <ModelList title={t("inputModels")} subtitle="Pretrained YOLO weights used by Train." items={models.input_models} />
       <ModelList title={t("outputModels")} subtitle="Global/project model index used by Validate and Convert." items={models.output_models} />
     </section>

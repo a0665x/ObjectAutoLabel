@@ -83,6 +83,7 @@ def test_conversion_package_accepts_direct_source_model_path(tmp_path: Path, mon
         return output
 
     monkeypatch.setattr(project_services, "_export_conversion_artifact", fake_export)
+    monkeypatch.setattr(project_services.platform, "machine", lambda: "x86_64")
 
     conversion = project_services.create_model_conversion_package(
         repo,

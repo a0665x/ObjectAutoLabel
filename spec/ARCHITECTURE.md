@@ -29,6 +29,8 @@ The current project-centric workflow is implemented in these primary modules:
 - Training, validation preview, conversion, and export bundles: `project_services.run_training`, validation preview helpers, `project_services.create_model_conversion_package`, and `project_services.create_model_export_bundle`.
 - Runtime launcher and LAN/Tailscale compatibility: `backend.app.server` starts Uvicorn on the selected bind IP and can start a localhost TCP proxy to preserve Tailscale serve forwarding.
 - Netron visualization: `main.get_model_conversion_netron` starts Netron for one selected artifact; `main.proxy_netron` exposes it through same-origin `/api/netron/...` and rewrites upstream Netron frontend assets for local embedded use.
+- Optional sign-in: `auth.AuthService` exposes one small authentication interface over Authlib adapters for Google, Facebook, and LINE. When enabled, session middleware protects project/file/job APIs while health and authentication endpoints remain public.
+- Cooperative job cancellation: `JobRunner.cancel` records `cancel_requested`; long-running modules check `job_control.raise_if_cancelled` at safe work boundaries. Training checks at batch boundaries before JobRunner finalizes the job as `cancelled`.
 
 `backend/app/services.py` still exists as a legacy compatibility/reference module, but new route behavior should use `project_services.py`, `world_models.py`, `repositories.py`, and `label_io.py`.
 
@@ -37,12 +39,29 @@ The current project-centric workflow is implemented in these primary modules:
 - Streamlit session state was replaced with explicit JSON payloads and persisted project records.
 - Tkinter file dialogs were removed because they do not fit containerized browser workflows.
 - Job polling was introduced so slow operations do not block the browser request.
+- OAuth provider tokens are used only to retrieve a verified profile. The signed application session stores only provider, stable subject, display name, email, and picture URL; provider access tokens are not retained in the browser session.
 - Models are separated into `world_model/` for YOLO-World weights, `input_model/` for training input weights, project-local `data/projects/<slug>/output_model/` for trained/exported artifacts, and global `output_model/` as a compatibility/index surface.
-- Model conversion is package-oriented: one conversion run can produce multiple ONNX/TFLite precision artifacts and writes class/schema metadata beside them.
+- Model conversion is package-oriented: one conversion run can produce selected ONNX FP32 and/or LiteRT FP32 artifacts on x86_64 and writes class/schema metadata beside them. Historical packages may contain older target types.
 - Dataset preparation is project-centric: sources, images, annotations, splits, training runs, exports, and jobs are all stored in SQLite.
 - Source registration is project-local: image-folder sources are copied into the project workspace, and video frame extraction writes under that source's project `sources` directory.
 - Startup migration preserves older project-id output folders by moving current-project legacy outputs into project-local storage and updating stored DB paths.
 - UI workflow state is artifact-aware, not only job-history-aware. The Workflow Guide should consider current source/split/train/export artifacts when deciding whether a step is done, and it treats Review/Validate as spot-check stages rather than required blocking gates.
+
+### Review mutation flow
+
+Review bbox edits stay client-side until Save, but project-image removal is an
+immediate backend mutation with a recoverable operation id. The backend
+tombstones the image, moves only project-owned files to project-local trash,
+recomputes Augment/Split staleness, and returns the next queue image atomically.
+Session Undo restores through that operation id. See
+[Review editing and image removal](references/review-editing-and-image-removal.md).
+
+### Conversion boundary
+
+Model conversion is capability-gated before job creation. The active path is
+official Ultralytics FP32 ONNX/LiteRT on x86_64 only; aarch64 returns a checkpoint
+handoff instruction and does not enqueue conversion. See
+[Current conversion boundary](references/model-conversion-current.md).
 
 ## External Dependencies
 

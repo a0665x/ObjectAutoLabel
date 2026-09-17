@@ -1,24 +1,14 @@
-import type { ReviewStatus } from "../api/client";
 import type { Annotation } from "../types";
+import { clipAnnotation } from "../annotation/geometry";
 
 export const UNSAVED_REVIEW_CHANGES_MESSAGE = "You have unsaved review changes. Switch anyway?";
 
-type ReviewBaseline = {
-  annotations: Annotation[];
-  reviewStatus: ReviewStatus;
-};
-
-export function createReviewBaseline(annotations: Annotation[], reviewStatus: ReviewStatus): string {
-  const baseline: ReviewBaseline = { annotations, reviewStatus };
-  return JSON.stringify(baseline);
+export function createReviewBaseline(annotations: Annotation[]): string {
+  return JSON.stringify(annotations.map(clipAnnotation));
 }
 
-export function hasDirtyReviewState(
-  baseline: string,
-  annotations: Annotation[],
-  reviewStatus: ReviewStatus
-): boolean {
-  return baseline !== createReviewBaseline(annotations, reviewStatus);
+export function hasDirtyReviewState(baseline: string, annotations: Annotation[]): boolean {
+  return baseline !== createReviewBaseline(annotations);
 }
 
 export function shouldProceedWithReviewNavigation(

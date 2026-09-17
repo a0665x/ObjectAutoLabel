@@ -10,6 +10,7 @@ ObjectAutoLabel is a Dockerized WebUI for object-detection dataset preparation a
 
 ## Read First
 
+- [Project language](../CONTEXT.md): compact canonical vocabulary; implementation details stay in `spec/`.
 - [Architecture](ARCHITECTURE.md): service boundaries, request flow, and migration choices.
 - [Modules](MODULES.md): source tree and responsibility map.
 - [Runtime](RUNTIME.md): Docker, `run.sh`, ports, volumes, and environment assumptions.
@@ -20,6 +21,23 @@ ObjectAutoLabel is a Dockerized WebUI for object-detection dataset preparation a
 - [Testing](TESTING.md): current validation approach and gaps.
 - [Current Status](STATUS.md): recently fixed bugs, active runtime URLs, data-path migration state, and known caveats for the next agent.
 
+## Task Router
+
+Load only the documents for the requested change, then verify the named source
+files before editing behavior.
+
+| Change area | Read first | Deep implementation reference |
+| --- | --- | --- |
+| Review canvas, shortcuts, Edit menu, image removal | [UI](UI.md), [API](API.md), [Data Model](DATA_MODEL.md) | [Review editing and image removal](references/review-editing-and-image-removal.md) |
+| Training, optimizer, MuSGD, CUDA | [UI](UI.md), [API](API.md), [Runtime](RUNTIME.md), [Testing](TESTING.md) | [Jetson CUDA lesson](references/lesson-20260731-jetson-docker-cuda-training.md) |
+| Model Convert, ONNX, LiteRT, architecture support | [UI](UI.md), [API](API.md), [Runtime](RUNTIME.md) | [Current conversion boundary](references/model-conversion-current.md) |
+| Stream Demo, webcam, uploaded video, inference engines, model version labels | [UI](UI.md), [API](API.md), [Runtime](RUNTIME.md) | [Stream Demo and model provenance](references/stream-demo.md) |
+| CLI terminal, editable Python utilities, staged inference plugins | [API](API.md), [Runtime](RUNTIME.md) | [Docker CLI workspace](references/cli-workspace.md) |
+| Project files, split lineage, stale artifacts | [Data Model](DATA_MODEL.md), [API](API.md) | [Review editing and image removal](references/review-editing-and-image-removal.md) |
+| Open Data, VisDrone, mapping, shared cache, source filters, Current Split | [UI](UI.md), [API](API.md), [Data Model](DATA_MODEL.md), [Testing](TESTING.md) | [Open Data import and Current Split](references/open-data-import-and-current-split.md), [LLM-assisted Open Data roadmap](references/llm-assisted-open-data-and-auth-roadmap.md) |
+| Sign-in, Google/Facebook/LINE OAuth, future user ownership | [Architecture](ARCHITECTURE.md), [API](API.md), [Runtime](RUNTIME.md), [UI](UI.md) | [LLM-assisted Open Data and authentication roadmap](references/llm-assisted-open-data-and-auth-roadmap.md) |
+| Startup, Docker, Tailscale HTTPS | [Runtime](RUNTIME.md), [Operations](OPERATIONS.md), [Current Status](STATUS.md) | [Jetson CUDA lesson](references/lesson-20260731-jetson-docker-cuda-training.md) |
+
 ## Major Concepts
 
 - `Project`: the main workspace record. Project files live under `data/projects/<slug>/` and state is stored in `object_autolabel.db`.
@@ -27,18 +45,24 @@ ObjectAutoLabel is a Dockerized WebUI for object-detection dataset preparation a
 - `Class schema`: per-project class ids, class names, and YOLO-World descriptors.
 - `YOLO-World model`: `.pt` or `.pth` weights in `world_model/` used for open-vocabulary pseudo-labeling.
 - `YOLO training model`: `.pt` or `.pth` weights in `input_model/` used by Ultralytics training. Project-owned trained/exported outputs live under `data/projects/<slug>/output_model/` and are indexed through `output_model/<project_slug>` symlinks.
-- `Offline review workbench`: the review screen is a local-first SVG annotation console with queue filters, review-status tracking, and YOLO label persistence under each project.
+- `Offline review workbench`: the review screen is a local-first SVG annotation console with deterministic pointer gestures, one Edit command registry, session undo/redo and clipboard, queue position tracking, and YOLO label persistence under each project.
+- `Project image removal`: `Shift+X` removes the active image from the project after confirmation, keeps raw external input untouched, marks affected Augment/Split builds outdated, and supports session undo while the backend tombstone remains restorable.
+- `Shared Open Data cache`: verified upstream VisDrone files plus compatible Ultralytics Platform Detect snapshots under `data/opendata/`; caches survive project deletion.
+- `Open Data import`: a named project-local mapped/sample version. The newest version joins Review, retained versions remain selectable by Split, all bypass Pseudo/Augment, and source train/val grouping is preserved (or deterministically completed when a Platform source has no Val).
+- `Current Split`: the newest immutable Split version and Train's default choice. Train may also select another non-outdated saved Split version; Review annotation changes, image removal, or Open Data replacement/removal invalidate the affected current build.
 - `Model conversion package`: a trained native `.pt` plus selected ONNX/TFLite artifacts, `classes.json`, and `metadata.json`.
 - `Artifact context`: project-level portfolio view that exposes upstream outputs for downstream page selectors.
 - `Build lineage`: Pseudo, Augment/source, Split, and Train create named build/run records. Downstream pages should refresh and expose explicit selectors for these records instead of assuming "latest" state.
+- `History deletion cascade`: Pseudo, Augment, Split, Training, Conversion, and Export history can be deleted with confirmation. Deleting an upstream item removes dependent downstream records and project-owned artifacts, refuses active jobs, preserves shared/raw inputs, and refreshes selectors so orphaned choices disappear.
 - `Settings workflow center`: the Settings page surfaces workflow defaults, project storage counts, model inventory, and runtime deployment guidance. Defaults speed setup but do not hide per-page input selectors.
-- `Dataset lifecycle`: project -> source analysis/registration -> frame extraction or image-folder copy -> committed class schema -> pseudo-labels -> optional review cleanup -> optional augmentation -> dataset split with sample preview -> YOLO training -> validation random sample -> model conversion -> package export.
+- `Dataset lifecycle`: project -> source analysis/registration -> frame extraction or image-folder copy -> committed class schema -> pseudo-labels -> optional review cleanup -> optional augmentation -> optional Open Data import -> Current Split -> YOLO training -> validation random sample -> model conversion -> package export.
 - `Project package`: all project-owned working images, annotations, YAML splits, augmentations, trained models, conversions, exports, and jobs live under the project DB row plus `data/projects/<slug>/`. Raw `data/input` media remains reusable and is not deleted with a project.
 - `Stale project record`: a DB project row whose workspace or global model-index entry was manually deleted. The UI detects this and offers safe stale cleanup instead of pretending the project is healthy.
 - `Operator feedback`: long-running actions must show immediate page-local feedback and task-center status so users are not left guessing whether a click registered.
 
 ## Change Guide
 
+- For domain terminology changes, update [Project language](../CONTEXT.md); keep implementation behavior in the routed spec document.
 - For backend behavior changes, read [Architecture](ARCHITECTURE.md), [API](API.md), and [Modules](MODULES.md).
 - For UI changes, read [UI](UI.md) first, then verify API payloads in [API](API.md).
 - For Docker, first-install/reboot/rebuild behavior, CUDA checks, or startup
@@ -59,3 +83,6 @@ ObjectAutoLabel is a Dockerized WebUI for object-detection dataset preparation a
 - The older Roboflow upload/download flow is not exposed by the current project-centric API.
 - The workbench is intentionally offline and trusted-user oriented; `/api/files` is limited to registered images or safe project output directories, not general filesystem browsing.
 - Review context-menu and multi-select interactions have TypeScript/build coverage, but should still receive manual browser smoke when refined because canvas interactions are hard to fully unit-test.
+- FP16, INT8, calibration, and aarch64 model conversion are intentionally outside the active conversion flow; do not infer them from historical design documents.
+- Generic local/archive Open Data ingestion and LLM-assisted normalization are planned only. The active flexible source remains Ultralytics Platform with an API key; route future work through [the recorded roadmap](references/llm-assisted-open-data-and-auth-roadmap.md).
+- Optional Google/Facebook/LINE authentication exists, but authenticated users currently share one project portfolio. Per-user project ownership and authorization are not implemented.

@@ -21,6 +21,12 @@ describe("geometry", () => {
     });
   });
 
+  it("keeps six-decimal boxes inside the right and bottom edges", () => {
+    const box = rectToYolo(clampRect({ x: 1, y: 1, width: 2, height: 2 }, { width: 3, height: 3 }), { width: 3, height: 3 });
+    expect(box.x_center + box.width / 2).toBeLessThanOrEqual(1);
+    expect(box.y_center + box.height / 2).toBeLessThanOrEqual(1);
+  });
+
   it("normalizes inverted rectangles before clamping", () => {
     expect(clampRect({ x: 80, y: 70, width: -30, height: -20 }, { width: 1000, height: 500 })).toEqual({
       x: 50,

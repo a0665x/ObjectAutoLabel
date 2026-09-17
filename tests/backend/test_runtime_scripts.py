@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -48,6 +50,10 @@ def make_fake_docker(tmp_path: Path, *, image_exists: bool) -> tuple[Path, Path]
         encoding="utf-8",
     )
     docker.chmod(0o755)
+    # Keep launcher lifecycle tests independent of the physical host.
+    uname = bin_dir / "uname"
+    uname.write_text("#!/usr/bin/env bash\nprintf 'x86_64\\n'\n", encoding="utf-8")
+    uname.chmod(0o755)
     return bin_dir, log_path
 
 
@@ -55,7 +61,7 @@ def runtime_env(bin_dir: Path, log_path: Path) -> dict[str, str]:
     return {
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "FAKE_DOCKER_LOG": str(log_path),
-        "OBJECT_AUTOLABEL_MODE": "jetson",
+        "OBJECT_AUTOLABEL_MODE": "desktop",
         "OBJECT_AUTOLABEL_SKIP_VERIFY": "1",
     }
 
@@ -85,6 +91,37 @@ def test_help_uses_public_platform_labels_and_english_commands() -> None:
     assert "x86_64 / amd64" in result.stdout
     assert "Jetson / aarch64" in result.stdout
     assert "--rebuild" in result.stdout
+    assert "--tailscale-up" in result.stdout
+    assert "--tailscale-status" in result.stdout
+    assert "--tailscale-down" in result.stdout
+    assert "tailnet-only HTTPS" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("command", "action"),
+    [
+        ("--tailscale-up", "up"),
+        ("--tailscale-status", "status"),
+        ("--tailscale-down", "down"),
+    ],
+)
+def test_tailscale_commands_dispatch_without_docker(tmp_path: Path, command: str, action: str) -> None:
+    calls = tmp_path / "tailscale-calls"
+    helper = tmp_path / "tailscale-helper"
+    helper.write_text(
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$1\" >> \"${TAILSCALE_CALLS}\"\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o755)
+
+    result = run_command(
+        "./run.sh",
+        command,
+        env={"OBJECT_AUTOLABEL_TAILSCALE_SCRIPT": str(helper), "TAILSCALE_CALLS": str(calls)},
+    )
+
+    assert result.returncode == 0
+    assert calls.read_text(encoding="utf-8").strip() == action
 
 
 def test_bare_launcher_with_existing_image_only_prints_guidance(
@@ -225,3 +262,16 @@ def test_detector_rejects_unknown_output_keys(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "Unexpected runtime detector key: EVIL" in result.stderr
     assert not marker.exists()
+
+
+def test_camera_device_requires_an_existing_video_node_and_rejects_other_devices(tmp_path: Path) -> None:
+    bin_dir, log_path = make_fake_docker(tmp_path, image_exists=True)
+    env = runtime_env(bin_dir, log_path)
+    env["OBJECT_AUTOLABEL_CAMERA_DEVICE"] = "/dev/video2"
+    result = run_command("./run.sh", "--up", env=env)
+    assert result.returncode != 0
+    assert "does not exist on the host" in result.stderr
+    env["OBJECT_AUTOLABEL_CAMERA_DEVICE"] = "/dev/mem"
+    result = run_command("./run.sh", "--up", env=env)
+    assert result.returncode != 0
+    assert "must be a /dev/videoN" in result.stderr

@@ -1,22 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_REVIEW_FILTERS, REVIEW_QUEUE_TILES, getNextImageId } from "./reviewConfig";
+import { DEFAULT_REVIEW_FILTERS, getNextImageId } from "./reviewConfig";
 
 describe("reviewConfig", () => {
-  it("defaults the queue to pending review work", () => {
-    expect(DEFAULT_REVIEW_FILTERS).toEqual({ review_status: "pending_review" });
-  });
-
-  it("surfaces the extra review queue tiles requested by the operator flow", () => {
-    expect(REVIEW_QUEUE_TILES.map((tile) => tile.key)).toEqual([
-      "pending_review",
-      "unreviewed",
-      "needs_fix",
-      "reviewed",
-      "skipped",
-      "edited",
-      "low_confidence"
-    ]);
+  it("defaults the queue to all three dataset source groups", () => {
+    expect(DEFAULT_REVIEW_FILTERS).toEqual({
+      source_groups: ["pseudo", "augment", "open_data"],
+      limit: 1_000_000
+    });
   });
 
   it("returns the next image id for save-and-next navigation", () => {

@@ -4,6 +4,7 @@ type ClassPaletteProps = {
   classes: ClassItem[];
   selectedClassId: number | null;
   selectedAnnotation: Annotation | null;
+  disabled?: boolean;
   onSelectClass: (item: ClassItem) => void;
 };
 
@@ -13,9 +14,9 @@ function colorForClass(classId: number): string {
   return CLASS_SWATCHES[Math.abs(classId) % CLASS_SWATCHES.length];
 }
 
-export function ClassPalette({ classes, selectedClassId, selectedAnnotation, onSelectClass }: ClassPaletteProps) {
+export function ClassPalette({ classes, selectedClassId, selectedAnnotation, disabled = false, onSelectClass }: ClassPaletteProps) {
   return (
-    <section className="panel class-palette">
+    <section className="panel class-palette" aria-busy={disabled}>
       <div className="sidebar-header">
         <div>
           <strong>Class palette</strong>
@@ -33,6 +34,7 @@ export function ClassPalette({ classes, selectedClassId, selectedAnnotation, onS
               key={item.class_id}
               type="button"
               className={active ? "class-chip is-active" : "class-chip"}
+              disabled={disabled}
               onClick={() => onSelectClass(item)}
             >
               <span className="class-swatch" style={{ background: colorForClass(item.class_id) }} />

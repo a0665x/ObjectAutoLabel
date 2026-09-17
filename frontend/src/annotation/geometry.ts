@@ -37,12 +37,13 @@ export function yoloToRect(
 }
 
 export function rectToYolo(rect: Rect, image: Size): Pick<Annotation, "x_center" | "y_center" | "width" | "height"> {
-  return {
-    x_center: round6((rect.x + rect.width / 2) / image.width),
-    y_center: round6((rect.y + rect.height / 2) / image.height),
-    width: round6(rect.width / image.width),
-    height: round6(rect.height / image.height)
-  };
+  const clipped = clampRect(rect, image);
+  const x_center = round6((clipped.x + clipped.width / 2) / image.width);
+  const y_center = round6((clipped.y + clipped.height / 2) / image.height);
+  // Rounding center and size independently can move an edge half a unit outside.
+  const width = Math.min(round6(clipped.width / image.width), 2 * Math.min(x_center, 1 - x_center));
+  const height = Math.min(round6(clipped.height / image.height), 2 * Math.min(y_center, 1 - y_center));
+  return { x_center, y_center, width, height };
 }
 
 export function clampRect(rect: Rect, image: Size): Rect {
@@ -58,4 +59,12 @@ export function clampRect(rect: Rect, image: Size): Rect {
     width: round6(Math.max(right - left, 0)),
     height: round6(Math.max(bottom - top, 0))
   };
+}
+
+export function clipAnnotation(annotation: Annotation): Annotation {
+  const left = annotation.x_center - annotation.width / 2;
+  const top = annotation.y_center - annotation.height / 2;
+  if (annotation.width >= 0 && annotation.height >= 0 && left >= 0 && top >= 0 &&
+      left + annotation.width <= 1 && top + annotation.height <= 1) return annotation;
+  return { ...annotation, ...rectToYolo(yoloToRect(annotation, { width: 1, height: 1 }), { width: 1, height: 1 }) };
 }

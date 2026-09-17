@@ -226,5 +226,4 @@ pytest -q tests/backend/test_verify_runtime_script.py tests/backend/test_runtime
 - Runtime acceptance: `scripts/verify-runtime.sh`
 - Runtime spec: `spec/RUNTIME.md`
 - Testing spec: `spec/TESTING.md`
-- Design: `docs/superpowers/specs/2026-07-31-platform-launcher-jetson-cuda-design.md`
-- Plan: `docs/superpowers/plans/2026-07-31-platform-launcher-jetson-cuda.md`
+- Historical design and execution notes remain recoverable from Git history before the skill-stack migration; this lesson is the retained current reference.

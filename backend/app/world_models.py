@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .artifact_naming import versioned_artifact_name
 from .repositories import Repository
+from .job_control import raise_if_cancelled
+from .world_model_adapter import PromptedWorldModel
+from .world_model_catalog import describe_world_model
 
 
 def resolve_world_model(repo: Repository, model_name: str) -> Path:
@@ -142,8 +145,6 @@ def run_yolo_world_pseudo_label(
     job_id: str,
 ) -> dict[str, Any]:
     import cv2
-    import supervision as sv
-    from ultralytics import YOLOWorld
 
     project = repo.get_project(project_id)
     if not project:
@@ -165,8 +166,11 @@ def run_yolo_world_pseudo_label(
 
     output_dir = Path(project["root_path"]) / "pseudo_labels" / Path(world_model).stem
     output_dir.mkdir(parents=True, exist_ok=True)
-    model = YOLOWorld(str(model_path))
-    model.set_classes(prompts)
+    model_info = describe_world_model(model_path.name)
+    try:
+        model = PromptedWorldModel(model_path, prompts)
+    except Exception as exc:
+        raise RuntimeError(f"{model_path.name} ({model_info['family']}) failed: {exc}") from exc
     labeled_count = 0
     detection_count = 0
     raw_detection_count = 0
@@ -175,21 +179,20 @@ def run_yolo_world_pseudo_label(
     processed_image_ids: list[str] = []
 
     for index, image in enumerate(images, start=1):
+        raise_if_cancelled(repo, job_id)
         image_path = Path(image["path"])
         frame = cv2.imread(str(image_path))
         if frame is None:
             continue
         height, width = frame.shape[:2]
-        result = model.predict(frame, conf=confidence, iou=iou, verbose=False)[0]
-        detections = sv.Detections.from_ultralytics(result)
+        try:
+            predictions = model.predict(frame, confidence, iou)
+        except Exception as exc:
+            raise RuntimeError(f"{model_path.name} ({model_info['family']}) failed: {exc}") from exc
         annotations: list[dict[str, Any]] = []
-        for xyxy, prompt_class_id, conf_score in zip(
-            detections.xyxy,
-            detections.class_id,
-            detections.confidence,
-        ):
-            mapping = mappings[int(prompt_class_id)]
-            x_center, y_center, box_width, box_height = _xyxy_to_yolo(xyxy, width, height)
+        for prediction in predictions:
+            mapping = mappings[prediction["prompt_class_id"]]
+            x_center, y_center, box_width, box_height = _xyxy_to_yolo(prediction["xyxy"], width, height)
             annotations.append(
                 {
                     "class_id": mapping["class_id"],
@@ -198,7 +201,7 @@ def run_yolo_world_pseudo_label(
                     "y_center": y_center,
                     "width": box_width,
                     "height": box_height,
-                    "confidence": float(conf_score),
+                    "confidence": prediction["confidence"],
                     "source_descriptor": mapping["source_descriptor"],
                     "source_type": "pseudo",
                     "edited": False,
@@ -230,7 +233,9 @@ def run_yolo_world_pseudo_label(
             ),
         )
 
-    run_name = (run_name or "").strip() or f"Pseudo_{datetime.now().strftime('%Y%m%d_%H%M%S')}_v{len(repo.list_pseudo_label_runs(project_id)) + 1:03d}"
+    run_name = (run_name or "").strip() or versioned_artifact_name(
+        "Pseudo", (item.get("run_name") or "" for item in repo.list_pseudo_label_runs(project_id))
+    )
     run = repo.create_pseudo_label_run_record(
         project_id=project_id,
         schema_id=schema_id,

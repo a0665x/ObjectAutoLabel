@@ -10,6 +10,24 @@ For first installation, run from the project root:
 
 The WebUI is served at `http://localhost:8501`.
 
+Install the default official YOLOE-26 Nano Seg checkpoint atomically before using it in Pseudo:
+
+```bash
+scripts/install-world-model.sh
+scripts/install-world-model.sh yolov8s-worldv2.pt
+```
+
+Both desktop and Jetson environments pin `ultralytics==8.4.130`, which supplies `YOLOE` and `YOLOWorld`. The no-argument installer supplies `yoloe-26n-seg.pt` plus `mobileclip2_b.ts` and `ViT-B-32.pt`; its checksum-verified catalog also offers `yolov8s-worldv2.pt` plus `ViT-B-32.pt`. Downloads are SHA-256 verified before atomic rename, including when an existing catalog asset is reused; custom URLs require an explicit expected SHA-256. The installer intentionally rejects YOLO-World v2 M/L/X because their artifacts lack locally attested catalog hashes. Those backend-recognized filenames may be supplied manually only through an approved trusted artifact/hash workflow. No pseudo-label job downloads assets at inference time. Segmentation inference is accepted, but this application persists only bounding boxes.
+
+Both images map bind-mounted encoders to every exact lookup location used by
+the pinned dependencies: `/app/mobileclip2_b.ts` for YOLOE,
+`/root/.cache/clip/ViT-B-32.pt` for direct `clip.load`, and
+`/app/weights/clip/ViT-B-32.pt` for Ultralytics' relative `WEIGHTS_DIR` cache.
+The world-model smoke checks both CLIP cache paths, loads real
+`clip.load("ViT-B/32")` with its network opener blocked, then runs the catalog
+`yolov8s-worldv2.pt` and `yoloe-26n-seg.pt` checkpoints with that block still
+active.
+
 The launcher shows the public platform choices `x86_64 / amd64` and
 `Jetson / aarch64`. If the selected local image is absent, it builds with
 Docker layer cache, starts the service, and runs the quick runtime check. If
@@ -31,7 +49,27 @@ the image id/time plus `--up` and `--rebuild` guidance.
 ./run.sh --detect
 ./run.sh --plan desktop
 ./run.sh --plan jetson
+./run.sh --tailscale-up
+./run.sh --tailscale-status
+./run.sh --tailscale-down
 ```
+
+## Private Tailscale HTTPS
+
+The host must have the Tailscale CLI installed, logged in, and permitted to use Serve/HTTPS. Start the WebUI first, then run `./run.sh --tailscale-up`. The launcher health-checks `http://127.0.0.1:8501/api/health` and configures private Tailscale Serve HTTPS `8501` to proxy that exact target. It prints an `https://<device>.<tailnet>.ts.net:8501/` URL available only to registered tailnet devices allowed by tailnet policy. Port `443` is deliberately left free for unrelated host services.
+
+`./run.sh --tailscale-status` is read-only. `./run.sh --tailscale-down` disables only the HTTPS `8501` route when its proxy target exactly matches this app. The helper ignores unrelated routes and Funnel endpoints on other ports, refuses to overwrite or remove an unrelated `8501` route, and never runs a global Serve reset. Override the dedicated external port only when intentionally assigning a different project slot: `OBJECT_AUTOLABEL_HTTPS_PORT=<port> ./run.sh --tailscale-up`.
+
+After a source rebuild, check both the proxy target and the private hostname:
+
+```bash
+curl -fsS http://127.0.0.1:8501/api/health
+curl -fsS https://<device>.<tailnet>.ts.net:8501/api/health
+```
+
+The external hostname is the `tailscale serve status` route, not a raw
+Tailscale `100.x` address. The route stays private to authorized tailnet
+devices and port 443 remains available to other host services.
 
 `./run.sh` and `./run.sh --rebuild` open an interactive keyboard selector when
 run in a terminal. Use the arrow keys to choose `x86_64 / amd64` or
@@ -56,7 +94,9 @@ Desktop mode uses `docker-compose.yml`:
 - Image: `object-autolabel:latest`.
 - Web/API port: `8501`.
 - Optional Netron port: `8081`.
-- GPU: `gpus: all`.
+- GPU: `runtime: nvidia` plus `gpus: all`. Explicit runtime selection also
+  supports hosts where NVIDIA Container Toolkit is configured in CDI mode;
+  invoking its legacy hook via `gpus` alone is rejected on those hosts.
 - Shared memory: `2gb`.
 
 Jetson mode uses `docker-compose.jetson.yml`:
@@ -98,6 +138,8 @@ STRICT_RUNTIME_CHECK=1 ./run.sh --detect
 
 ## Mounted Paths
 
+- Compose mounts `./data` for shared/project data and `./logs` for durable daily diagnostics.
+- `run.sh` captures each launcher session at `logs/<Taipei date>/launcher-<time>.log`; API runtime, jobs, and selected access events are separate structured files.
 - `./data:/app/data`
 - `./runs:/app/runs`
 - `./world_model:/app/world_model:ro`
@@ -118,6 +160,16 @@ STRICT_RUNTIME_CHECK=1 ./run.sh --detect
 - Jetson startup requires detected L4T plus an NVIDIA Docker runtime and does
   not silently fall back to CPU.
 
+## Optional OAuth Sign-in
+
+Copy `.env.example` to the ignored local `.env`, set `OBJECT_AUTOLABEL_AUTH_ENABLED=true`, generate an application session secret of at least 32 characters, and configure one or more provider client ID/secret pairs. `OBJECT_AUTOLABEL_PUBLIC_URL` must be the exact browser-facing origin; each provider callback is `/api/auth/callback/google`, `/api/auth/callback/facebook`, or `/api/auth/callback/line` under that origin.
+
+Authentication is disabled by default so existing trusted-local deployments are not locked out before credentials exist. Once enabled, project, file, model, and job APIs require the signed session. This is an authentication gate only: all authenticated users currently share the same project portfolio; it does not add per-user project authorization.
+
+The frontend application shell is served with `Cache-Control: no-store`, while
+content-hashed JS/CSS assets retain normal static-file caching. After a rebuild,
+reload an already-open browser tab so it requests the new application shell.
+
 ## Runtime Acceptance
 
 The launcher runs quick acceptance after a successful start. Run it explicitly
@@ -129,6 +181,20 @@ scripts/verify-runtime.sh --quick jetson
 
 Quick acceptance checks `/api/health`, the running image/state, PyTorch/CUDA
 versions, `torch.cuda.is_available()`, and the CUDA device name.
+
+Before the world-model smoke, install both catalog checkpoint families. The
+no-argument command installs the default YOLOE checkpoint and its encoders; it
+does not install the YOLO-World v2 checkpoint:
+
+```bash
+scripts/install-world-model.sh
+scripts/install-world-model.sh yolov8s-worldv2.pt
+docker exec object-autolabel python /app/scripts/smoke-world-models.py
+```
+
+It requires CUDA plus local `yolov8s-worldv2.pt`, `yoloe-26n-seg.pt`,
+`mobileclip2_b.ts`, and `ViT-B-32.pt`; any network attempt while loading CLIP
+fails the smoke.
 
 Prove that the container can actually train with CUDA using:
 
@@ -147,7 +213,50 @@ The 2026-07-31 AGX Orin hardware evidence, exact image/CUDA versions, training
 output, and AMP reference-download fix are preserved in
 [Jetson Docker CUDA and YOLO training acceptance](references/lesson-20260731-jetson-docker-cuda-training.md).
 
+For a real, retained two-lineage acceptance rather than the synthetic smoke,
+follow [the 0629 dual training acceptance report](../docs/verification/2026-08-30-0629-dual-training-acceptance.md).
+It requires separate empty project packages, one source registration per
+project, sequential jobs, and project-owned artifacts. Its accepted FP32
+retry used `yolov8n_pretrain_8020.pt`, one epoch, 640, batch 8, CUDA, SGD,
+`lr0=lrf=0.01`, `rect=false`, and `amp=false`. The latter flags default to
+`true` in the API; verify the persisted values and `args.yaml` rather than
+assuming a UI default. `diagnostics=true` is an opt-in troubleshooting field
+that returns aggregate training-step evidence in the job result and must not
+be enabled for a routine acceptance run.
+
+## Dependency Files by Platform
+
+`Dockerfile` installs `requirements.txt` for the desktop/x86_64 CUDA image.
+The desktop base is `pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime`, with
+`torch==2.11.0`, `torchvision==0.26.0`, and `torchaudio==2.11.0` retained by
+explicit requirements. This matches the PyTorch family in
+[LiteRT Torch 0.9.0's upstream requirements](https://github.com/google-ai-edge/litert-torch/blob/v0.9.0/requirements.txt).
+Its package metadata permits PyTorch 2.4, but importing its `tfl::slice.tensor`
+operator on the former 2.4.1 base fails because schema inference rejects the
+string default `shape=""`. Keep the build-time LiteRT import check enabled;
+successful pip resolution alone does not establish compatibility. Desktop GPU
+hosts need an NVIDIA driver compatible with CUDA 12.8.
+The base uses Ubuntu's managed Python 3.12. App dependencies live in
+`/opt/venv` with `--system-site-packages` to reuse its CUDA PyTorch packages
+without modifying the system Python installation; the image `PATH` selects
+this environment for pip, Uvicorn, and runtime verification.
+
+`Dockerfile.jetson` installs `requirements-jetson.txt` for NVIDIA's ARM64
+PyTorch image, then explicitly retains NumPy 1.x and compatible OpenCV.
+Model conversion is intentionally unavailable in the Jetson image; copy the
+`.pt` checkpoint to an x86_64 host for official Ultralytics FP32 ONNX or LiteRT
+export. The desktop image contains the required export dependencies. Change
+only the dependency file for the image being changed, rebuild that image, and
+rerun the platform's quick CUDA acceptance. The runtime pin was updated from
+`ultralytics==8.3.78` to `ultralytics==8.4.130` before the retained 0629
+acceptance; the closing documentation-only update did not make a further
+dependency change.
+
 ## Local Development
+
+Stream Demo uses the GStreamer packages in both images and an optional V4L2
+device overlay. Set `OBJECT_AUTOLABEL_CAMERA_DEVICE=/dev/video0` on launcher
+commands to map a host camera. See [Stream Demo runtime and verification](references/stream-demo.md).
 
 The backend can be run without Docker if dependencies are installed:
 
@@ -157,4 +266,5 @@ uvicorn backend.app.main:app --host 0.0.0.0 --port 8501
 
 Docker is the supported path because the YOLO and CUDA dependency stack is heavy.
 
-Jetson images include the ARM-specific TensorFlow/TFLite export stack (`tensorflow-aarch64`, `onnx2tf`, `tf-keras`, `tflite-support`, `onnx-graphsurgeon`, and `sng4onnx`) so Model Convert does not block on runtime dependency installation.
+Neither platform installs conversion dependencies at runtime. Jetson rejects
+conversion before a job is created and directs the user to an x86_64 host.

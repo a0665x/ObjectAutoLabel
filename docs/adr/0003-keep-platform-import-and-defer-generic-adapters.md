@@ -1,0 +1,3 @@
+# Keep Platform import and defer generic Open Data adapters
+
+Ultralytics Platform remains the active flexible Open Data import path, using a request-only or host-provided API key and the existing normalized bbox workflow. The built-in Official catalog remains limited to explicitly implemented and tested adapters such as VisDrone2019-DET. Broad hand-written adapter expansion is deferred until the project introduces a provider-neutral normalized cache contract and a bounded LLM-assisted profiler/planner with deterministic execution and validation. This preserves the working path now while avoiding an unsafe arbitrary-format importer; the trade-off is that non-Platform formats remain unsupported until that roadmap is implemented.

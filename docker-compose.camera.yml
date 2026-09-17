@@ -1,0 +1,4 @@
+services:
+  object-autolabel:
+    devices:
+      - "${OBJECT_AUTOLABEL_CAMERA_DEVICE:-/dev/video0}:/dev/video0"

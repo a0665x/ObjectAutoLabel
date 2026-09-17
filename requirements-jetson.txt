@@ -2,7 +2,7 @@ fastapi==0.115.12
 uvicorn[standard]==0.34.2
 python-multipart==0.0.20
 pyyaml==6.0.2
-ultralytics==8.3.78
+ultralytics==8.4.130
 supervision==0.25.1
 roboflow==1.1.61
 netron==8.2.7
@@ -12,18 +12,14 @@ numpy>=1.26.0,<2.0
 opencv-python<4.12
 pillow==10.4.0
 requests-toolbelt==1.0.0
+Authlib==1.8.0
+cryptography>=45.0.7,<47
+httpx==0.28.1
+itsdangerous==2.2.0
 ftfy==6.3.1
 regex==2024.11.6
 onnx==1.16.1
 onnxruntime==1.21.0
 onnxslim==0.1.49
-# Ultralytics TFLite export dependencies for Jetson/aarch64.
-# Keep these preinstalled so conversion jobs do not block on runtime pip installs.
-tensorflow-aarch64==2.16.1
-tf-keras==2.16.0
-sng4onnx>=1.0.1
-onnx-graphsurgeon>=0.3.26
-onnx2tf>1.17.5,<=1.26.3
-tflite-support<=0.4.3
-# tensorflow-aarch64 2.16.x is not compatible with protobuf 5+ on Jetson.
-protobuf>=3.20.3,<5
+# Inference only; model conversion remains desktop-only.
+ai-edge-litert==2.1.4

@@ -1,20 +1,28 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
+import time
 from typing import Any
 from urllib.error import URLError
 from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import project_services, world_models
+from . import model_lineage, open_data, project_services, world_models
+from .auth import AuthService, AuthSettings
+from .conversion_runtime import ConversionCapability, detect_conversion_capabilities
+from .world_model_catalog import PROMPT_ENCODER_FILENAMES, describe_world_model, list_world_model_details
 from .config import AppPaths, ensure_runtime_dirs
 from .db import connect, initialize_schema
 from .jobs import JobRunner
-from .repositories import Repository
+from .logging_config import configure_logging, log_access_event, log_runtime_event
+from .repositories import Repository, utc_now
+from .stream_routes import create_stream_router
+from .cli_workspace import create_cli_router
 from .schemas import (
     AnnotationSaveRequest,
     AugmentationPreviewRequest,
@@ -22,9 +30,14 @@ from .schemas import (
     ClassSchemaCreate,
     DatasetSplitCreate,
     FrameRunCreate,
+    ImageRemovalResult,
+    ImageRestoreResult,
     ModelConversionCreate,
     ModelExportCreate,
     ModelExportBundleCreate,
+    OpenDataDownloadRequest,
+    OpenDataInspectRequest,
+    OpenDataRequest,
     ProjectCreate,
     PseudoLabelRunCreate,
     SourceCreate,
@@ -48,7 +61,8 @@ ALLOWED_CORS_ORIGINS = [
     "http://100.94.21.85:8501",
 ]
 SAFE_PROJECT_FILE_DIRS = {"augmentations", "conversions", "exports", "frames", "metadata", "pseudo_labels", "reviewed_labels", "sources", "splits"}
-TRUSTED_DATA_ROOTS = [Path("/home/a0665x/Desktop/AI_AGX_WS/autolabel").resolve()]
+TRUSTED_DATA_ROOTS: list[Path] = []
+PROCESS_STARTED_AT = utc_now()
 
 
 def resolve_frontend_dist(frontend_dir: Path = FRONTEND_DIR) -> Path:
@@ -60,6 +74,19 @@ def resolve_frontend_dist(frontend_dir: Path = FRONTEND_DIR) -> Path:
             "or use the supported Docker startup path."
         )
     return dist_dir
+
+
+def apply_frontend_cache_policy(response: Response) -> Response:
+    if response.headers.get("content-type", "").startswith("text/html"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+class FrontendStaticFiles(StaticFiles):
+    """Serve immutable build assets while forcing the app shell to revalidate."""
+
+    async def get_response(self, path: str, scope: dict[str, Any]) -> Response:
+        return apply_frontend_cache_policy(await super().get_response(path, scope))
 
 
 def is_safe_project_file(file_path: Path) -> bool:
@@ -96,15 +123,64 @@ def resolve_served_file(path: str) -> Path:
 
 paths = AppPaths()
 ensure_runtime_dirs(paths)
+TRUSTED_DATA_ROOTS[:] = [paths.project_root.resolve()]
+configure_logging(paths)
+log_runtime_event("application.starting", project_root=str(paths.project_root))
 db = connect(paths.database_path)
 initialize_schema(db)
-repo = Repository(db=db, paths=paths)
+repo = Repository(db=db, paths=paths, process_started_at=PROCESS_STARTED_AT)
 repo.migrate_project_output_models()
 repo.migrate_project_source_copies()
 repo.mark_interrupted_jobs()
 jobs = JobRunner(repo=repo, max_workers=2)
+auth = AuthService(AuthSettings.from_env())
 
-app = FastAPI(title="ObjectAutoLabel API", version="0.2.0")
+
+@asynccontextmanager
+async def app_lifespan(_app: FastAPI):
+    project_services.sweep_pending_image_removal_trash(repo)
+    yield
+
+
+app = FastAPI(title="ObjectAutoLabel API", version="0.2.0", lifespan=app_lifespan)
+app.include_router(create_stream_router(lambda: repo, lambda: auth.settings.enabled, ALLOWED_CORS_ORIGINS))
+app.include_router(create_cli_router(paths.project_root / "cli_workspace", lambda: auth.settings.enabled, ALLOWED_CORS_ORIGINS))
+
+
+@app.middleware("http")
+async def require_authenticated_api(request: Request, call_next):
+    started = time.monotonic()
+    public_api = request.url.path == "/api/health" or request.url.path.startswith("/api/auth/")
+    if auth.settings.enabled and request.url.path.startswith("/api/") and not public_api:
+        if not request.session.get("user"):
+            response = JSONResponse({"detail": "Authentication required"}, status_code=401)
+        else:
+            response = await call_next(request)
+    else:
+        response = await call_next(request)
+    elapsed_ms = round((time.monotonic() - started) * 1000, 1)
+    if request.method != "GET" or response.status_code >= 400 or elapsed_ms >= 2000:
+        log_access_event(
+            "http.request",
+            method=request.method,
+            route=request.url.path,
+            status_code=response.status_code,
+            elapsed_ms=elapsed_ms,
+        )
+    return response
+
+
+if auth.settings.enabled:
+    from starlette.middleware.sessions import SessionMiddleware
+
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=auth.settings.session_secret,
+        session_cookie="object_autolabel_session",
+        same_site="lax",
+        https_only=bool(auth.settings.public_url and auth.settings.public_url.startswith("https://")),
+        max_age=7 * 24 * 60 * 60,
+    )
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_CORS_ORIGINS,
@@ -117,6 +193,156 @@ app.add_middleware(
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     return {"ok": True, "project_root": str(PROJECT_ROOT)}
+
+
+@app.get("/api/open-data/catalog")
+def open_data_catalog() -> list[dict[str, Any]]:
+    return open_data.list_open_data_catalog(paths)
+
+
+@app.post("/api/open-data/inspect")
+def inspect_open_data(payload: OpenDataInspectRequest) -> dict[str, Any]:
+    try:
+        return open_data.inspect_ultralytics_dataset(paths, payload.dataset_url)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (ConnectionError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/open-data/files/{dataset_key}/{split}/{filename}")
+def open_data_file(dataset_key: str, split: str, filename: str) -> FileResponse:
+    source = open_data.resolve_open_data_image(paths, dataset_key, split, filename)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Open Data file not found")
+    return FileResponse(source)
+
+
+@app.post("/api/projects/{project_id}/open-data/download")
+def download_open_data(project_id: str, payload: OpenDataDownloadRequest) -> dict[str, Any]:
+    if not repo.get_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    if not payload.license_accepted:
+        raise HTTPException(status_code=400, detail="Confirm the dataset usage notice before downloading.")
+    active = repo.find_active_job(project_id, "open_data_download")
+    if active:
+        return active
+    if payload.dataset_key == "visdrone2019-det":
+        download_fn = open_data.download_visdrone
+        download_args: tuple[Any, ...] = (repo,)
+    else:
+        download_fn = open_data.download_ultralytics_dataset
+        api_key = payload.api_key.get_secret_value() if payload.api_key else None
+        download_args = (repo, payload.dataset_key, api_key)
+    return jobs.create(
+        "open_data_download",
+        download_fn,
+        *download_args,
+        project_id=project_id,
+        related_type="open_data_cache",
+    )
+
+
+@app.post("/api/projects/{project_id}/open-data/preview")
+def preview_open_data(project_id: str, payload: OpenDataRequest) -> dict[str, Any]:
+    try:
+        return open_data.build_open_data_preview(
+            repo, project_id, payload.dataset_key, payload.schema_id,
+            payload.mapping, payload.sample_percentage, payload.seed, payload.preview_seed,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/projects/{project_id}/open-data/import")
+def active_open_data_import(project_id: str) -> dict[str, Any] | None:
+    if not repo.get_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    return repo.get_active_open_data_import(project_id)
+
+
+@app.get("/api/projects/{project_id}/open-data/imports")
+def list_open_data_imports(project_id: str) -> list[dict[str, Any]]:
+    if not repo.get_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    return repo.list_open_data_imports(project_id)
+
+
+@app.get("/api/projects/{project_id}/image-source-summary")
+def image_source_summary(project_id: str) -> dict[str, Any]:
+    if not repo.get_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    return repo.get_image_source_summary(project_id)
+
+
+@app.post("/api/projects/{project_id}/open-data/import")
+def create_open_data_import(project_id: str, payload: OpenDataRequest) -> dict[str, Any]:
+    if not repo.get_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    active = repo.find_active_job(project_id, "open_data_import")
+    if active:
+        return active
+    return jobs.create(
+        "open_data_import",
+        open_data.publish_open_data_import,
+        repo,
+        project_id,
+        payload.dataset_key,
+        payload.schema_id,
+        payload.mapping,
+        payload.sample_percentage,
+        payload.seed,
+        payload.version_name,
+        project_id=project_id,
+        related_type="open_data_import",
+    )
+
+
+@app.delete("/api/projects/{project_id}/open-data/import")
+def remove_open_data_import(project_id: str) -> dict[str, Any]:
+    current = repo.remove_active_open_data_import(project_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="No active Open Data import")
+    try:
+        open_data.remove_project_import_files(repo, project_id, current["project_dir"])
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"removed": True, "dataset_key": current["dataset_key"]}
+
+
+@app.get("/api/auth/status")
+def auth_status(request: Request) -> dict[str, Any]:
+    return auth.status(request)
+
+
+@app.get("/api/auth/login/{provider}")
+async def begin_oauth_login(provider: str, request: Request):
+    try:
+        return await auth.begin(request, provider)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Login provider is not configured") from exc
+
+
+@app.get("/api/auth/callback/{provider}", name="complete_oauth_login")
+async def complete_oauth_login(provider: str, request: Request):
+    try:
+        await auth.complete(request, provider)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Login provider is not configured") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Login failed") from exc
+    return RedirectResponse(url="/", status_code=303)
+
+
+@app.post("/api/auth/logout")
+def logout(request: Request) -> dict[str, bool]:
+    if auth.settings.enabled:
+        auth.logout(request)
+    return {"ok": True}
 
 
 @app.get("/api/files")
@@ -189,8 +415,12 @@ def create_class_schema(project_id: str, payload: ClassSchemaCreate) -> dict[str
 
 
 @app.get("/api/models/world")
-def list_world_models() -> dict[str, list[str]]:
-    return {"world_models": repo.list_models()["world_models"]}
+def list_world_models() -> dict[str, Any]:
+    names = [
+        name for name in repo.list_models()["world_models"]
+        if name not in PROMPT_ENCODER_FILENAMES
+    ]
+    return {"world_models": names, "world_model_details": list_world_model_details(names)}
 
 
 @app.get("/api/models/input")
@@ -210,7 +440,7 @@ def list_jobs(project_id: str | None = None) -> list[dict[str, Any]]:
 
 @app.get("/api/file-browser")
 def browse_files(path: str | None = None, mode: str = "image_folder") -> dict[str, Any]:
-    return project_services.browse_local_files(path, mode)
+    return project_services.browse_local_files(path, mode, preferred_roots=[paths.project_root])
 
 
 @app.get("/api/jobs/{job_id}")
@@ -219,6 +449,28 @@ def get_job(job_id: str) -> dict[str, Any]:
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str) -> dict[str, Any]:
+    job = jobs.cancel(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+@app.delete("/api/projects/{project_id}/history/{artifact_type}/{artifact_id}")
+def delete_project_history(project_id: str, artifact_type: str, artifact_id: str) -> dict[str, Any]:
+    if artifact_type not in {"open_data", "pseudo", "augmentation", "split", "training", "conversion", "export"}:
+        raise HTTPException(status_code=400, detail="Unsupported history artifact type")
+    try:
+        return project_services.delete_history_artifact(
+            repo, project_id, artifact_type, artifact_id
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/api/projects/{project_id}/sources")
@@ -253,6 +505,8 @@ def list_project_images(
     review_status: str | None = None,
     has_low_confidence: bool | None = None,
     source_asset_id: str | None = None,
+    source_origin: str | None = None,
+    source_groups: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
@@ -263,9 +517,119 @@ def list_project_images(
         review_status=review_status,
         has_low_confidence=has_low_confidence,
         source_asset_id=source_asset_id,
+        source_origin=source_origin,
+        source_groups=source_groups.split(",") if source_groups else None,
         limit=limit,
         offset=offset,
     )
+
+
+@app.get("/api/projects/{project_id}/review-source-counts")
+def review_source_counts(project_id: str) -> dict[str, int]:
+    if not repo.get_project(project_id): raise HTTPException(status_code=404, detail="Project not found")
+    return repo.get_review_source_counts(project_id)
+
+
+@app.get("/api/projects/{project_id}/bbox-histogram")
+def bbox_histogram(project_id: str, source_groups: str | None = None) -> list[dict[str, Any]]:
+    if not repo.get_project(project_id): raise HTTPException(status_code=404, detail="Project not found")
+    return repo.get_bbox_histogram(project_id, source_groups.split(",") if source_groups else None)
+
+
+@app.get("/api/projects/{project_id}/image-position")
+def get_image_position(
+    project_id: str,
+    image_id: str,
+    review_status: str | None = None,
+    has_low_confidence: bool | None = None,
+    source_asset_id: str | None = None,
+    source_origin: str | None = None,
+    source_groups: str | None = None,
+) -> dict[str, int]:
+    if not repo.get_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    position = repo.get_image_position(
+        project_id,
+        image_id,
+        review_status=review_status,
+        has_low_confidence=has_low_confidence,
+        source_asset_id=source_asset_id,
+        source_origin=source_origin,
+        source_groups=source_groups.split(",") if source_groups else None,
+    )
+    if position is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+    return position
+
+
+@app.delete(
+    "/api/projects/{project_id}/images/{image_id}",
+    response_model=ImageRemovalResult,
+)
+def remove_project_image(project_id: str, image_id: str) -> dict[str, Any]:
+    try:
+        with repo.db.synchronized():
+            if not repo.get_project(project_id):
+                raise HTTPException(status_code=404, detail="Project not found")
+            image = repo.get_image(image_id)
+            if not image or image["project_id"] != project_id:
+                raise HTTPException(status_code=404, detail="Image not found")
+
+            active_images = repo.list_images(project_id, limit=1_000_000)
+            current_index = next(
+                (
+                    index
+                    for index, candidate in enumerate(active_images)
+                    if candidate["id"] == image_id
+                ),
+                None,
+            )
+            if current_index is None:
+                raise HTTPException(status_code=404, detail="Image not found")
+            operation = project_services.remove_project_image(repo, project_id, image_id)
+            remaining_images = repo.list_images(project_id, limit=1_000_000)
+            next_image_id = (
+                remaining_images[min(current_index, len(remaining_images) - 1)]["id"]
+                if remaining_images
+                else None
+            )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Image not found") from None
+    except FileExistsError:
+        raise HTTPException(status_code=409, detail="Image removal destination already exists") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Image removal path is invalid") from None
+
+    return {
+        "operation_id": operation["id"],
+        "image_id": image_id,
+        "next_image_id": next_image_id,
+    }
+
+
+@app.post(
+    "/api/projects/{project_id}/image-removals/{operation_id}/restore",
+    response_model=ImageRestoreResult,
+)
+def restore_project_image(project_id: str, operation_id: str) -> dict[str, Any]:
+    if not repo.get_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    operation = repo.get_image_removal_operation(operation_id)
+    if not operation or operation["project_id"] != project_id:
+        raise HTTPException(status_code=404, detail="Image removal operation not found")
+    try:
+        restored_operation = project_services.restore_project_image(repo, project_id, operation_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Image removal data not found") from None
+    except FileExistsError:
+        raise HTTPException(status_code=409, detail="Restore destination already exists") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Image removal path is invalid") from None
+
+    image = repo.get_image(restored_operation["image_id"])
+    if not image:
+        raise HTTPException(status_code=404, detail="Restored image not found")
+    return {"image": image, "annotations": repo.list_annotations(image["id"])}
 
 
 @app.get("/api/projects/{project_id}/review-stats")
@@ -313,6 +677,27 @@ def create_pseudo_label_run(project_id: str, payload: PseudoLabelRunCreate) -> d
         source = repo.get_source_asset(payload.source_asset_id)
         if not source or source["project_id"] != project_id:
             raise HTTPException(status_code=404, detail="Source not found")
+    if Path(payload.world_model).name != payload.world_model or "/" in payload.world_model or "\\" in payload.world_model:
+        raise HTTPException(status_code=422, detail="World model must be a filename in world_model")
+    model_path = world_models.resolve_world_model(repo, payload.world_model)
+    world_model_dir = repo.paths.world_model_dir.resolve()
+    try:
+        model_path.resolve().relative_to(world_model_dir)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="World model must stay within world_model") from None
+    model_info = describe_world_model(model_path.name)
+    if not model_info["supported"]:
+        raise HTTPException(status_code=422, detail=f"Unsupported world model: {payload.world_model}")
+    if not model_path.is_file():
+        raise HTTPException(status_code=404, detail=f"World model not found: {payload.world_model}")
+    encoder_name = "mobileclip2_b.ts" if model_info["family"] == "yoloe-26" else "ViT-B-32.pt"
+    encoder_path = repo.paths.world_model_dir / encoder_name
+    try:
+        encoder_path.resolve().relative_to(world_model_dir)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Prompt encoder must stay within world_model") from None
+    if not encoder_path.is_file():
+        raise HTTPException(status_code=422, detail=f"Prompt encoder {encoder_name} is not installed beside {payload.world_model}")
     active = repo.find_active_job(project_id, "pseudo_label")
     if active:
         raise HTTPException(status_code=409, detail="Pseudo-label generation is already running for this project. Wait for it to finish before starting another run.")
@@ -372,6 +757,8 @@ def preview_augmentation(project_id: str, payload: AugmentationPreviewRequest) -
             box_motion_blur=payload.box_motion_blur,
             rotation=payload.rotation,
             horizontal_flip=payload.horizontal_flip,
+            vertical_flip=payload.vertical_flip,
+            mirror_probability=payload.mirror_probability,
             polarity=payload.polarity,
             limit=payload.limit,
         )
@@ -399,6 +786,8 @@ def create_augmentation_run(project_id: str, payload: AugmentationRunCreate) -> 
         payload.box_motion_blur,
         payload.rotation,
         payload.horizontal_flip,
+        payload.vertical_flip,
+        payload.mirror_probability,
         payload.copies,
         payload.skip_augment,
         project_id=project_id,
@@ -432,6 +821,16 @@ def list_pseudo_label_runs(project_id: str) -> list[dict[str, Any]]:
 def create_dataset_split(project_id: str, payload: DatasetSplitCreate) -> dict[str, Any]:
     if not repo.get_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
+    try:
+        project_services.validate_dataset_split_augmentation(
+            repo,
+            project_id,
+            payload.augmentation_run_id,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return jobs.create(
         "dataset_split",
         project_services.create_dataset_split,
@@ -443,6 +842,7 @@ def create_dataset_split(project_id: str, payload: DatasetSplitCreate) -> dict[s
         payload.test_ratio,
         payload.pseudo_label_run_id,
         payload.augmentation_run_id,
+        payload.open_data_import_id,
         project_id=project_id,
         related_type="dataset_split",
     )
@@ -456,11 +856,11 @@ def list_dataset_splits(project_id: str) -> list[dict[str, Any]]:
 
 
 @app.get("/api/projects/{project_id}/dataset-splits/{split_id}/samples")
-def list_dataset_split_samples(project_id: str, split_id: str, limit_per_bucket: int = 6) -> dict[str, list[dict[str, Any]]]:
+def list_dataset_split_samples(project_id: str, split_id: str, limit_per_bucket: int = 6, sample_seed: int | None = None) -> dict[str, list[dict[str, Any]]]:
     if not repo.get_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
     try:
-        return project_services.list_dataset_split_samples(repo, project_id, split_id, limit_per_bucket)
+        return project_services.list_dataset_split_samples(repo, project_id, split_id, limit_per_bucket, sample_seed)
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
 
@@ -473,15 +873,16 @@ def list_training_runs(project_id: str) -> list[dict[str, Any]]:
 
 
 @app.post("/api/projects/{project_id}/validation-preview")
-def create_validation_preview(project_id: str, payload: ValidationPreviewRequest) -> dict[str, Any]:
+def create_validation_preview(project_id: str, payload: ValidationPreviewRequest) -> list[dict[str, Any]]:
     try:
-        return project_services.run_validation_preview(
+        return project_services.run_validation_previews(
             repo,
             project_id,
             model_name=payload.model_name,
             schema_id=payload.schema_id,
             image_path=payload.image_path,
             folder_path=payload.folder_path,
+            sample_count=payload.sample_count,
             confidence=payload.confidence,
             iou=payload.iou,
         )
@@ -496,6 +897,8 @@ def create_training_run(project_id: str, payload: TrainingRunCreate) -> dict[str
     split = repo.get_dataset_split(payload.dataset_split_id)
     if not split or split["project_id"] != project_id:
         raise HTTPException(status_code=404, detail="Dataset split not found")
+    if split.get("outdated"):
+        raise HTTPException(status_code=409, detail="Dataset split is outdated; rebuild Augment/Split before training.")
     return jobs.create(
         "training",
         project_services.run_training,
@@ -511,7 +914,10 @@ def create_training_run(project_id: str, payload: TrainingRunCreate) -> dict[str
         payload.optimizer,
         payload.lr0,
         payload.lrf,
+        payload.rect,
         payload.run_name,
+        payload.diagnostics,
+        payload.amp,
         project_id=project_id,
         related_type="training_run",
     )
@@ -540,7 +946,12 @@ def create_model_export(project_id: str, payload: ModelExportCreate) -> dict[str
 def list_model_conversions(project_id: str) -> list[dict[str, Any]]:
     if not repo.get_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
-    return repo.list_model_conversion_runs(project_id)
+    return model_lineage.list_conversions(repo, project_id)
+
+
+@app.get("/api/model-conversion-capabilities")
+def list_model_conversion_capabilities() -> list[ConversionCapability]:
+    return detect_conversion_capabilities()
 
 
 @app.get("/api/projects/{project_id}/model-sources")
@@ -559,6 +970,13 @@ def get_artifact_context(project_id: str) -> dict[str, Any]:
 
 @app.post("/api/projects/{project_id}/model-conversions")
 def create_model_conversion(project_id: str, payload: ModelConversionCreate) -> dict[str, Any]:
+    capabilities = detect_conversion_capabilities()
+    unavailable_reason = next(
+        (capability.reason for capability in capabilities if not capability.available),
+        None,
+    )
+    if unavailable_reason:
+        raise HTTPException(status_code=409, detail=unavailable_reason)
     if not payload.training_run_id and not payload.source_model_path:
         raise HTTPException(status_code=422, detail="training_run_id or source_model_path is required")
     if payload.training_run_id:
@@ -582,6 +1000,7 @@ def create_model_conversion(project_id: str, payload: ModelConversionCreate) -> 
         [target.model_dump() for target in payload.targets],
         payload.imgsz,
         source_model_path=payload.source_model_path,
+        opset=payload.opset,
         project_id=project_id,
         related_type="model_conversion",
     )
@@ -673,7 +1092,7 @@ def create_export_bundle(project_id: str, payload: ModelExportBundleCreate) -> d
 
 
 try:
-    app.mount("/", StaticFiles(directory=resolve_frontend_dist(), html=True), name="frontend")
+    app.mount("/", FrontendStaticFiles(directory=resolve_frontend_dist(), html=True), name="frontend")
 except RuntimeError as frontend_error:
     frontend_error_message = str(frontend_error)
 

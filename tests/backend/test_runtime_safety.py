@@ -4,11 +4,62 @@ import cv2
 import numpy as np
 import pytest
 from fastapi import HTTPException
+from fastapi.responses import Response
 
 from backend.app import main
 from backend.app.config import AppPaths
 from backend.app.db import connect, initialize_schema
 from backend.app.repositories import Repository
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_desktop_and_jetson_pin_ultralytics_84130() -> None:
+    for name in ("requirements.txt", "requirements-jetson.txt"):
+        assert "ultralytics==8.4.130" in (ROOT / name).read_text(encoding="utf-8")
+
+
+def test_desktop_uses_direct_litert_packages_without_legacy_conversion_stack() -> None:
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8").lower()
+
+    assert "litert-torch==0.9.0" in requirements
+    assert "ai-edge-litert==2.1.4" in requirements
+    for legacy_package in (
+        "onnx2tf",
+        "tensorflow",
+        "tf-keras",
+        "sng4onnx",
+        "onnx-graphsurgeon",
+        "tflite-support",
+    ):
+        assert legacy_package not in requirements
+
+
+def test_jetson_has_no_tflite_conversion_only_dependency_block() -> None:
+    requirements = (ROOT / "requirements-jetson.txt").read_text(encoding="utf-8").lower()
+
+    for conversion_package in (
+        "onnx2tf",
+        "tensorflow-aarch64",
+        "tf-keras",
+        "sng4onnx",
+        "onnx-graphsurgeon",
+        "tflite-support",
+    ):
+        assert conversion_package not in requirements
+
+
+def test_container_smoke_checks_disable_autoinstall_and_import_supported_runtime() -> None:
+    desktop = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    jetson = (ROOT / "Dockerfile.jetson").read_text(encoding="utf-8")
+
+    assert "YOLO_AUTOINSTALL=False" in desktop
+    assert "YOLO_AUTOINSTALL=False" in jetson
+    assert "import ultralytics" in desktop
+    assert "import ultralytics" in jetson
+    assert "import litert_torch" in desktop
+    assert "import ai_edge_litert" in desktop
 
 
 def make_repo(tmp_path: Path) -> Repository:
@@ -32,6 +83,14 @@ def test_resolve_frontend_dist_prefers_built_index(tmp_path: Path) -> None:
     (dist_dir / "index.html").write_text("<!doctype html>", encoding="utf-8")
 
     assert main.resolve_frontend_dist(frontend_dir) == dist_dir
+
+
+def test_frontend_html_is_never_cached_but_hashed_assets_can_be() -> None:
+    index_response = main.apply_frontend_cache_policy(Response(media_type="text/html"))
+    asset_response = main.apply_frontend_cache_policy(Response(media_type="text/javascript"))
+
+    assert index_response.headers["cache-control"] == "no-store"
+    assert "cache-control" not in asset_response.headers
 
 
 def test_read_local_file_allows_registered_image_paths(tmp_path: Path) -> None:

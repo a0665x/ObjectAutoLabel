@@ -16,6 +16,7 @@ frontend/dist/
 world_model/
 input_model/
 output_model/
-.codex/
-.agents/
-.superpowers/
+.*
+cli_workspace/.cli-token
+cli_workspace/.preview
+cli_workspace/.bash_history

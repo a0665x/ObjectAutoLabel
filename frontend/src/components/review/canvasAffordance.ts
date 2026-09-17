@@ -16,7 +16,6 @@ type CanvasAffordance = {
   labelCharWidth: number;
   minLabelWidth: number;
   fontSize: number;
-  previewDashArray: string;
 };
 
 export function screenPixelsToImageUnits(pixels: number, { imageWidth, renderedWidth }: CanvasScaleInput): number {
@@ -25,19 +24,19 @@ export function screenPixelsToImageUnits(pixels: number, { imageWidth, renderedW
 }
 
 export function getCanvasAffordance(scale: CanvasScaleInput): CanvasAffordance {
+  // SVG non-scaling strokes already use screen pixels. Only geometry needs conversion.
   return {
     cornerRadius: screenPixelsToImageUnits(6, scale),
-    strokeWidth: screenPixelsToImageUnits(2, scale),
-    selectedStrokeWidth: screenPixelsToImageUnits(3, scale),
+    strokeWidth: 4,
+    selectedStrokeWidth: 6,
     handleRadius: screenPixelsToImageUnits(7, scale),
-    handleStrokeWidth: screenPixelsToImageUnits(2, scale),
+    handleStrokeWidth: 4,
     labelHeight: screenPixelsToImageUnits(20, scale),
     labelPaddingX: screenPixelsToImageUnits(8, scale),
     labelGap: screenPixelsToImageUnits(4, scale),
     labelBaselineOffset: screenPixelsToImageUnits(14, scale),
     labelCharWidth: screenPixelsToImageUnits(7, scale),
     minLabelWidth: screenPixelsToImageUnits(54, scale),
-    fontSize: screenPixelsToImageUnits(12, scale),
-    previewDashArray: `${screenPixelsToImageUnits(10, scale)} ${screenPixelsToImageUnits(8, scale)}`
+    fontSize: screenPixelsToImageUnits(12, scale)
   };
 }

@@ -1,16 +1,4 @@
-import type { ReviewStats, ReviewStatus } from "../api/client";
-
-export const DEFAULT_REVIEW_FILTERS = { review_status: "pending_review" } as const;
-
-export const REVIEW_QUEUE_TILES: Array<{ key: keyof ReviewStats; label: string; status?: ReviewStatus }> = [
-  { key: "pending_review", label: "Pending review", status: "pending_review" },
-  { key: "unreviewed", label: "Unreviewed", status: "unreviewed" },
-  { key: "needs_fix", label: "Needs fix", status: "needs_fix" },
-  { key: "reviewed", label: "Reviewed", status: "reviewed" },
-  { key: "skipped", label: "Skipped", status: "skipped" },
-  { key: "edited", label: "Edited" },
-  { key: "low_confidence", label: "Low confidence" },
-];
+export const DEFAULT_REVIEW_FILTERS = { source_groups: ["pseudo", "augment", "open_data"] as Array<"pseudo" | "augment" | "open_data">, limit: 1_000_000 } as const;
 
 type QueueImage = {
   id: string;

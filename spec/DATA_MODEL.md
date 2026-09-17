@@ -2,6 +2,13 @@
 
 ## SQLite State
 
+### Open Data lineage
+
+- `open_data_imports` stores named project versions with mapping, sample percentage, fixed selection seed, counts, derived directory, active/saved status, and job lineage. One newest version is Review-active; saved versions remain available to Split.
+- `images.source_origin`, `source_split`, `source_key`, and `open_data_import_id` distinguish project images from imported records.
+- `dataset_splits.open_data_import_id` captures the imported selection; `is_current` identifies the default newest Split, while any non-outdated saved Split remains eligible for new training.
+- Annotation edits only stale Current Split when bbox/class content changes; review-status-only saves do not.
+
 The current application initializes `data/object_autolabel.db` on startup. Core tables are:
 
 - `projects`
@@ -10,7 +17,9 @@ The current application initializes `data/object_autolabel.db` on startup. Core 
 - `class_schemas`
 - `class_descriptors`
 - `pseudo_label_runs`
+- `open_data_imports`
 - `images`
+- `image_removal_operations`
 - `annotations`
 - `review_sessions`
 - `dataset_splits`
@@ -20,6 +29,13 @@ The current application initializes `data/object_autolabel.db` on startup. Core 
 - `model_conversion_artifacts`
 - `model_export_bundles`
 - `jobs`
+
+Active-image queries require `images.removed_at is null`. A removal operation
+sets `images.removed_at` and `removal_operation_id`; the corresponding
+`image_removal_operations` row records original/trash paths and `restored_at`.
+Affected `augmentation_runs` and `dataset_splits` use `outdated` plus a
+structured `outdated_reason` to prevent removed inputs from silently entering
+new training. See [Review editing and image removal](references/review-editing-and-image-removal.md).
 
 ## Class Schema
 
@@ -46,13 +62,20 @@ Pseudo-label, augmentation/source, split, and training records are treated as ve
 - `pseudo_label_runs.run_name`: human-readable pseudo-label build name submitted from the Pseudo page.
 - `augmentation_runs.name`: human-readable augment or source/pass-through build name.
 - `dataset_splits.name`: human-readable split build name.
+- Automatic Pseudo, Augment, Open Data, Split, and Train names use `<Type>_MMDD_vNNN`, for example `Train_0914_v003`. The month/day is local time, the zero-padded version advances from retained history, and an explicitly entered operator name is preserved unchanged. UI identity is the richer `[Pseudo] → [Augment] + [Open Data] → [Split · total images]` lineage assembled from the stored foreign keys and immutable `image_ids_json` snapshot.
 - `training_runs.run_name`: human-readable training run name.
 - `training_runs.save_dir`: actual Ultralytics result directory returned by the training call.
 - `training_runs.best_model_path` / `last_model_path`: exact weight paths from that `save_dir`.
 - `training_runs.metrics_json`: persisted epoch/loss metric list used by the Train page loss chart.
+- `training_runs.settings_json`: exact submitted epochs, image size, batch, device, patience, optimizer, learning rates, rect, and amp settings used to reconstruct the run configuration after refresh.
 
 ## Runtime Folders
 
+- `data/opendata/visdrone2019-det/`: verified shared raw cache; never project-owned.
+- `data/opendata/ultralytics/<owner>/<dataset>/`: verified shared Ultralytics Platform Detect cache containing normalized source-class YOLO labels, train/val images, and a manifest with owner/slug/task/classes/export version and NDJSON checksum. API keys and signed URLs are not retained.
+- `data/projects/<slug>/opendata/visdrone2019-det`: relative link to the shared cache.
+- `data/projects/<slug>/opendata/imports/<id>/`: disposable mapped/sample image links, normalized labels, review labels, and manifest.
+- `logs/YYYY-MM-DD/`: `runtime.jsonl`, `jobs.jsonl`, `access.log`, and launcher logs with rotation/redaction.
 - `data/input`: user-provided videos and images.
 - `data/projects/<slug>`: one project workspace. Deleting a project deletes this directory, project-owned DB rows, project job history, and the global model-index entries for that project, but never deletes `data/input`.
 - `data/projects/<slug>/sources/<source_asset_id>/images`: project-owned copies of image-folder sources. `source_assets.path` keeps the original operator-selected raw input path for traceability, but registered project `images.path` values point to this copied folder after registration/migration.
@@ -81,6 +104,11 @@ On startup, the repository layer calls `migrate_project_output_models()`:
 
 ## Model Conversion Package
 
+Each conversion artifact records its input layout. ONNX and native PT use the
+standard NCHW contract. LiteRT FP32 may be traced as NCHW or NHWC; the selected
+layout is persisted in the artifact row and conversion manifest so downstream
+consumers can prepare input tensors correctly.
+
 Each conversion package stores a schema snapshot as JSON so model ids remain explainable after deployment. The source model may come from a known `training_runs` record or from a discovered `.pt`/`.pth` file under `output_model/`.
 
 ```json
@@ -90,17 +118,30 @@ Each conversion package stores a schema snapshot as JSON so model ids remain exp
 ]
 ```
 
-The package also writes `metadata.json` with source training run, source `.pt`, schema id/name, and converted artifact records.
+The package also writes `metadata.json` with source training run, source `.pt`, schema id/name, and converted artifact records. A downloaded export ZIP adds `training/run.json` and, when available, `training/args.yaml` plus CSV/image result evidence without copying arbitrary files or symlinks from the run directory.
 
 ## Augmentation Label Contract
 
 Augmentation outputs are project-owned. Pixel transforms that move geometry must update annotations at the same time:
 
-- Horizontal flip mirrors normalized `x_center`.
+- Horizontal mirror maps normalized `x_center` to `1 - x_center`.
+- Vertical mirror maps normalized `y_center` to `1 - y_center`.
 - Random rotation rotates bbox corner coordinates around the image center and rewraps the result as a normalized YOLO bbox.
 - Hue, exposure/brightness, blur, random noise, and camera gain change pixels only and keep bbox geometry unchanged.
 - Bounding Box Motion Blur applies localized blur inside target boxes; it should keep bbox geometry unchanged.
 
 The Augment UI uses live previews and post-create random output checks to make annotation/pixel alignment visible before training.
 
+`augmentation_runs.settings_json` records `mirror_probability` in addition to the chosen horizontal/vertical direction. New UI drafts store Mirror inside the ordered `effects` array; legacy browser drafts with old `horizontalFlip`/`verticalFlip` flags are migrated to a 100%-probability Mirror effect when loaded.
+
 For non-skip augmentation builds, each generated output samples the configured effect stack independently. Effects that support direction are uniformly sampled within `[-value,+value]`; non-negative effects such as noise and blur sample magnitudes from `[0,value]`. `x3/x5/x8/x10` means that many composite outputs per source image. `Skip augment` creates one copied source/pass-through output per source image.
+
+## History Deletion Contract
+
+Deletion follows stored lineage from upstream to downstream:
+
+`Pseudo → Augment → Split → Training → Conversion → Export`
+
+`Open Data import → Split → Training → Conversion → Export`
+
+The selected record and every dependent downstream record are removed in one database transaction. Associated completed jobs are removed, Current Split falls back to the newest remaining Split, and generated Augment or imported Open Data image rows are deleted with their annotations. The Open Data import's shared `project_dir` download cache is retained. Filesystem cleanup is restricted to unshared child directories beneath project-owned `pseudo_labels/`, `augmentations/`, `splits/`, and `output_model/{runs,conversions,exports}/`. Training cleanup removes the run-specific Ultralytics `save_dir`, never the shared `output_model/runs` parent. A path still referenced by another record is retained.

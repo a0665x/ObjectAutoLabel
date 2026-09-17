@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 import select
 import socket
@@ -10,6 +11,26 @@ import uvicorn
 
 
 APP_PORT = 8501
+
+
+def resolve_bind_host(configured_host: str) -> str:
+    if configured_host in {"127.0.0.1", "localhost", "0.0.0.0"}:
+        return configured_host
+    try:
+        family = socket.AF_INET6 if ipaddress.ip_address(configured_host).version == 6 else socket.AF_INET
+    except ValueError:
+        family = socket.AF_INET
+    try:
+        with socket.socket(family, socket.SOCK_STREAM) as probe:
+            probe.bind((configured_host, 0))
+    except OSError as exc:
+        print(
+            f"Configured bind host {configured_host!r} is unavailable ({exc}); "
+            "falling back to 127.0.0.1",
+            flush=True,
+        )
+        return "127.0.0.1"
+    return configured_host
 
 
 class _ProxyHandler(socketserver.BaseRequestHandler):
@@ -51,9 +72,9 @@ def start_localhost_proxy(target_host: str) -> None:
 
 
 def main() -> None:
-    bind_host = os.getenv("OBJECT_AUTOLABEL_BIND_HOST", "127.0.0.1")
+    bind_host = resolve_bind_host(os.getenv("OBJECT_AUTOLABEL_BIND_HOST", "127.0.0.1"))
     start_localhost_proxy(bind_host)
-    uvicorn.run("backend.app.main:app", host=bind_host, port=APP_PORT)
+    uvicorn.run("backend.app.main:app", host=bind_host, port=APP_PORT, access_log=False)
 
 
 if __name__ == "__main__":

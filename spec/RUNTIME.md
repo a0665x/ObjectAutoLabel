@@ -17,6 +17,20 @@ scripts/install-world-model.sh
 scripts/install-world-model.sh yolov8s-worldv2.pt
 ```
 
+Install checksum-verified pretrained starting weights before using Train:
+
+```bash
+scripts/install-input-model.sh                  # yolo11n.pt
+scripts/install-input-model.sh yolo26n.pt       # optional alternative
+scripts/install-input-model.sh yolo11n.pt yolo26n.pt
+```
+
+The input installer writes to `input_model/`. Its fixed catalog uses official
+Ultralytics release assets for YOLO11n and YOLO26n, verifies SHA-256 before an
+atomic rename, and also verifies an existing destination. A custom URL requires
+the matching explicit SHA-256 environment variable. Training itself never
+downloads a checkpoint.
+
 Both desktop and Jetson environments pin `ultralytics==8.4.130`, which supplies `YOLOE` and `YOLOWorld`. The no-argument installer supplies `yoloe-26n-seg.pt` plus `mobileclip2_b.ts` and `ViT-B-32.pt`; its checksum-verified catalog also offers `yolov8s-worldv2.pt` plus `ViT-B-32.pt`. Downloads are SHA-256 verified before atomic rename, including when an existing catalog asset is reused; custom URLs require an explicit expected SHA-256. The installer intentionally rejects YOLO-World v2 M/L/X because their artifacts lack locally attested catalog hashes. Those backend-recognized filenames may be supplied manually only through an approved trusted artifact/hash workflow. No pseudo-label job downloads assets at inference time. Segmentation inference is accepted, but this application persists only bounding boxes.
 
 Both images map bind-mounted encoders to every exact lookup location used by

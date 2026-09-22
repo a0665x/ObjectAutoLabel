@@ -95,9 +95,12 @@ health and CUDA acceptance. The focused runtime/conversion suite passed all
 retest. TorchAO emitted optional extension-load warnings, but the supported
 FP32 LiteRT export and tensor allocation completed successfully.
 
-The training acceptance requires a local `.pt` weight in `input_model/`. It
-runs one bounded CUDA epoch and verifies `best.pt`/`last.pt`; it does not
-download weights or accept a CPU fallback. On Jetson, interpret memory through
+The training acceptance requires a local `.pt` weight in `input_model/`. The
+checksum and atomic-install behavior of both `scripts/install-input-model.sh`
+and `scripts/install-world-model.sh` has focused backend test coverage. The
+training acceptance runs one bounded CUDA epoch and verifies
+`best.pt`/`last.pt`; it does not download weights or accept a CPU fallback. On
+Jetson, interpret memory through
 `/proc/meminfo` `MemAvailable`, not discrete-GPU `nvidia-smi` VRAM fields.
 
 `npm --prefix frontend run build` writes `frontend/dist/`; that build output remains ignored by git.

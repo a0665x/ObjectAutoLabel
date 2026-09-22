@@ -140,10 +140,18 @@ ObjectAutoLabel/
 ├── data/
 │   ├── input/       # reusable source images and videos
 │   ├── opendata/    # downloaded shared Open Data caches
-│   └── projects/    # project workspaces, labels, splits and project artifacts
-├── world_model/     # open-vocabulary checkpoints and prompt encoders
-├── input_model/     # pretrained YOLO checkpoints used to start training
-└── output_model/    # index for trained, converted and exported models
+│   └── projects/
+│       └── <project-slug>/
+│           └── output_model/ # this project's trained and converted artifacts
+├── world_model/             # models used by the Pseudo page
+│   ├── yoloe-26n-seg.pt     # default open-vocabulary checkpoint
+│   ├── mobileclip2_b.ts      # YOLOE prompt encoder
+│   ├── ViT-B-32.pt           # CLIP encoder
+│   └── yolov8s-worldv2.pt    # optional YOLO-World v2 checkpoint
+├── input_model/             # pretrained starting weights for the Train page
+│   ├── yolo11n.pt            # default installer choice
+│   └── yolo26n.pt            # optional newer Nano checkpoint
+└── output_model/            # project model index and export packages
 ```
 
 `data/projects/<slug>/` is owned by the application. Project deletion removes
@@ -177,15 +185,44 @@ written to `logs/YYYY-MM-DD/`.
    include `yoloe-26*-seg.pt`, `yolov8*-worldv2.pt`, and
    `yolov8*-world.pt`/`.pth`.
 
-3. Copy a native pretrained YOLO detection checkpoint into `input_model/` for
-   the Train page:
+   The catalog files come from the official
+   [Ultralytics assets releases](https://github.com/ultralytics/assets/releases);
+   the CLIP encoder comes from the URL encoded in OpenAI's published CLIP
+   checksum. The installer verifies every download before making it visible to
+   the application.
+
+   | File placed in `world_model/` | Download source | Installed for |
+   | --- | --- | --- |
+   | `yoloe-26n-seg.pt` | [Ultralytics assets v8.4.0](https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-26n-seg.pt) | Default YOLOE pseudo labeling |
+   | `mobileclip2_b.ts` | [Ultralytics assets v8.4.0](https://github.com/ultralytics/assets/releases/download/v8.4.0/mobileclip2_b.ts) | YOLOE text prompts |
+   | `ViT-B-32.pt` | [OpenAI CLIP](https://openaipublic.azureedge.net/clip/models/40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af/ViT-B-32.pt) | YOLO-World text prompts |
+   | `yolov8s-worldv2.pt` | [Ultralytics assets v8.3.0](https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8s-worldv2.pt) | Optional YOLO-World v2 pseudo labeling |
+
+3. Install a pretrained detection checkpoint for the Train page. With no
+   argument, the input-model installer downloads YOLO11n:
 
    ```bash
-   cp /path/to/yolov8n.pt input_model/
+   # Default: input_model/yolo11n.pt
+   scripts/install-input-model.sh
+
+   # Optional: install YOLO26n too
+   scripts/install-input-model.sh yolo26n.pt
+
+   # Or install both catalog choices in one command
+   scripts/install-input-model.sh yolo11n.pt yolo26n.pt
    ```
 
-   Use a checkpoint supported by the pinned Ultralytics version. Keep model
-   binaries out of Git; `.gitignore` retains only each directory's placeholder.
+   Download references and model descriptions:
+
+   | File placed in `input_model/` | Official download | Model guide |
+   | --- | --- | --- |
+   | `yolo11n.pt` | [Ultralytics assets v8.3.0](https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt) | [YOLO11](https://docs.ultralytics.com/models/yolo11/) |
+   | `yolo26n.pt` | [Ultralytics assets v8.4.0](https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.pt) | [YOLO26](https://docs.ultralytics.com/models/yolo26/) |
+
+   You may also copy another compatible `.pt` checkpoint into `input_model/`
+   manually. The script's two catalog entries are SHA-256 verified and written
+   atomically. Model binaries remain ignored by Git; `.gitignore` retains only
+   each directory's placeholder.
 
 4. Start or recreate the service. These folders are bind-mounted, so adding a
    model does not require rebuilding the image:
@@ -246,6 +283,17 @@ start without one.
 The directory is bind-mounted read-only at `/app/world_model` inside the
 container. Adding a weight file does not require rebuilding the Docker image;
 refresh the Pseudo page to update its model list.
+
+### Input-model integrity and compatibility
+
+`scripts/install-input-model.sh` installs the default `yolo11n.pt`, or accepts
+`yolo11n.pt` and `yolo26n.pt` as explicit arguments. It downloads from official
+Ultralytics release assets, verifies the catalog SHA-256, and atomically moves
+the file into `input_model/`. It refuses a corrupt existing file instead of
+overwriting it. Custom mirrors require the corresponding `YOLO11N_URL` and
+`YOLO11N_SHA256`, or `YOLO26N_URL` and `YOLO26N_SHA256`, environment variables.
+The Train page discovers compatible `.pt` files from this directory after a
+browser refresh.
 
 ## Workflow
 

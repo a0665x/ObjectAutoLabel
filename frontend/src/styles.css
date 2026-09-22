@@ -2468,6 +2468,337 @@ input[type="range"] {
   color: var(--muted);
 }
 
+/* Local file manager follows the same light, rounded workspace language. */
+.modal-backdrop {
+  background: rgba(29, 34, 43, 0.48);
+  backdrop-filter: blur(8px);
+}
+
+.file-manager {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 0;
+  width: min(1080px, 96vw);
+  height: min(760px, 90vh);
+  max-height: 90vh;
+  overflow: hidden;
+  border: 1px solid rgba(18, 20, 23, 0.12);
+  border-radius: 22px;
+  padding: 0;
+  background: rgba(252, 253, 255, 0.98);
+  box-shadow: 0 28px 90px rgba(20, 25, 31, 0.24);
+}
+
+.file-manager-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 20px 22px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.file-manager-header h2,
+.file-manager-header p {
+  margin: 0;
+}
+
+.file-manager-header h2 {
+  margin-top: 3px;
+}
+
+.file-manager-header .eyebrow {
+  color: var(--button-browse);
+  font-size: 0.72rem;
+  font-weight: 850;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.file-manager-close,
+.file-nav-actions button,
+.path-breadcrumbs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.file-manager-close:hover,
+.file-nav-actions button:hover:not(:disabled),
+.path-breadcrumbs button:hover:not(:disabled) {
+  border-color: rgba(8, 126, 164, 0.38);
+  background: rgba(8, 126, 164, 0.07);
+}
+
+.file-manager-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(247, 249, 252, 0.92);
+}
+
+.file-nav-actions,
+.path-breadcrumbs,
+.path-breadcrumbs span {
+  display: flex;
+  align-items: center;
+}
+
+.file-nav-actions {
+  gap: 6px;
+}
+
+.file-nav-actions .up-folder-button {
+  gap: 7px;
+  width: auto;
+  padding: 0 12px;
+  font-weight: 750;
+}
+
+.path-breadcrumbs {
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.path-breadcrumbs span {
+  flex: 0 0 auto;
+  color: #9aa3af;
+}
+
+.path-breadcrumbs button {
+  min-width: 0;
+  min-height: 38px;
+  border-color: transparent;
+  padding: 0 9px;
+  font-size: 0.86rem;
+  font-weight: 720;
+  white-space: nowrap;
+}
+
+.path-breadcrumbs button:disabled {
+  color: var(--ink);
+  opacity: 1;
+  background: rgba(8, 126, 164, 0.08);
+}
+
+.file-manager-body {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.29fr) minmax(0, 1fr);
+  min-height: 0;
+}
+
+.file-manager-sidebar {
+  min-width: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--line);
+  padding: 16px 12px;
+  background: rgba(245, 247, 250, 0.82);
+}
+
+.file-manager-sidebar .file-shortcuts {
+  margin: 0;
+}
+
+.file-manager-sidebar .shortcut-grid {
+  grid-template-columns: 1fr;
+}
+
+.file-manager-sidebar .shortcut-card {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 58px;
+  border-color: transparent;
+  border-radius: 13px;
+  padding: 8px 10px;
+  background: transparent;
+}
+
+.file-manager-sidebar .shortcut-card:hover:not(:disabled),
+.file-manager-sidebar .shortcut-card.is-active {
+  border-color: rgba(8, 126, 164, 0.22);
+  background: rgba(8, 126, 164, 0.09);
+  box-shadow: none;
+}
+
+.shortcut-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.file-manager-sidebar .shortcut-copy strong,
+.file-manager-sidebar .shortcut-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-manager-sidebar .shortcut-copy small {
+  color: var(--muted);
+  font-size: 0.71rem;
+  font-weight: 520;
+}
+
+.file-manager-content {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px 18px 18px;
+}
+
+.file-manager-content .folder-navigation {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.file-manager-content .folder-navigation input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.86rem;
+}
+
+.file-manager-content .folder-selection-row {
+  border-color: rgba(8, 126, 164, 0.18);
+  border-radius: 14px;
+  padding: 11px 13px;
+  background: linear-gradient(135deg, rgba(8, 126, 164, 0.08), rgba(110, 86, 207, 0.04));
+}
+
+.folder-selection-row > div {
+  display: grid;
+  gap: 3px;
+}
+
+.folder-selection-row > div span {
+  color: var(--muted);
+  font-size: 0.83rem;
+}
+
+.file-manager-content .file-list {
+  align-content: start;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 3px;
+}
+
+.file-manager-content .file-row {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 11px;
+  min-height: 58px;
+  border-radius: 13px;
+  padding: 9px 11px;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+button.file-row:hover {
+  transform: translateY(-1px);
+  border-color: rgba(8, 126, 164, 0.32);
+  background: #fff;
+  box-shadow: 0 8px 20px rgba(20, 25, 31, 0.07);
+}
+
+.file-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  color: #84620a;
+  background: rgba(255, 190, 32, 0.14);
+}
+
+.file-icon.image {
+  color: #087ea4;
+  background: rgba(8, 126, 164, 0.1);
+}
+
+.file-icon.video {
+  color: #6e56cf;
+  background: rgba(110, 86, 207, 0.11);
+}
+
+.file-row-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.file-row-copy strong,
+.file-row-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-row-copy small {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 520;
+}
+
+.file-count-badge,
+.file-select-label {
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: var(--muted);
+  background: rgba(104, 113, 125, 0.09);
+  font-size: 0.72rem;
+  font-weight: 780;
+  white-space: nowrap;
+}
+
+.file-count-badge.has-files,
+.file-select-label {
+  color: #087044;
+  background: rgba(48, 209, 88, 0.12);
+}
+
+.file-manager-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 150px;
+  margin: 0;
+  border: 1px dashed rgba(18, 20, 23, 0.15);
+  border-radius: 14px;
+  color: var(--muted);
+  background: rgba(247, 249, 252, 0.74);
+}
+
+@media (max-width: 760px) {
+  .modal-backdrop { padding: 10px; }
+  .file-manager { width: 100%; height: min(92dvh, 760px); border-radius: 18px; }
+  .file-manager-header { padding: 16px; }
+  .file-manager-header p { display: none; }
+  .file-manager-toolbar { grid-template-columns: 1fr; padding: 9px 12px; }
+  .file-manager-body { grid-template-columns: 1fr; }
+  .file-manager-sidebar { max-height: 148px; border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 12px; }
+  .file-manager-sidebar .shortcut-grid { display: flex; overflow-x: auto; }
+  .file-manager-sidebar .shortcut-card { flex: 0 0 210px; }
+  .file-manager-content { padding: 12px; }
+  .file-manager-content .folder-navigation { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .file-manager *,
+  .file-manager *::before,
+  .file-manager *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
+}
+
 .touch-feedback {
   position: relative;
   transition: transform 120ms ease, box-shadow 120ms ease, opacity 120ms ease;

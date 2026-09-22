@@ -1,16 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowLeft,
+  ArrowRight,
   Boxes,
   Brain,
   Database,
   Dice5,
   Download,
   Eye,
+  FileImage,
   Film,
+  Folder,
   FolderInput,
   FolderOpen,
   GripHorizontal,
   HelpCircle,
+  ChevronRight,
   LoaderCircle,
   LogOut,
   PackageCheck,
@@ -23,7 +28,8 @@ import {
   StopCircle,
   Trash2,
   Upload,
-  UserRound
+  UserRound,
+  X
 } from "lucide-react";
 import { api, type AugmentationPreviewSample, type FileBrowserResult, type FileBrowserShortcut, type SourceAnalysis, type SplitSample, type SplitSamples, type ValidationPreviewResult } from "./api/client";
 import { versionedBuildName } from "./artifactNaming";
@@ -954,7 +960,7 @@ export function FileManagerShortcuts({ shortcuts, currentPath, onSelect }: { sho
   if (!shortcuts.length) return null;
   return (
     <section className="file-shortcuts" aria-label="Common folders">
-      <h3>Common folders</h3>
+      <h3>Places</h3>
       <div className="shortcut-grid">
         {shortcuts.map((shortcut) => {
           const active = shortcut.path === currentPath;
@@ -967,14 +973,28 @@ export function FileManagerShortcuts({ shortcuts, currentPath, onSelect }: { sho
               title={shortcut.description}
               onClick={() => onSelect(shortcut.path)}
             >
-              <strong>{shortcut.label}</strong>
-              <span>{shortcut.exists ? shortcut.path : "missing"}</span>
+              <Folder size={17} aria-hidden="true" />
+              <span className="shortcut-copy"><strong>{shortcut.label}</strong><small>{shortcut.exists ? shortcut.path : "missing"}</small></span>
+              {shortcut.exists && shortcut.match_count > 0 ? <span className="file-count-badge">{shortcut.match_count}</span> : null}
             </button>
           );
         })}
       </div>
     </section>
   );
+}
+
+export function filePathBreadcrumbs(path: string): Array<{ label: string; path: string }> {
+  const normalized = path.trim().replace(/\\/g, "/");
+  if (!normalized) return [];
+  const absolute = normalized.startsWith("/");
+  const parts = normalized.split("/").filter(Boolean);
+  const crumbs: Array<{ label: string; path: string }> = absolute ? [{ label: "Root", path: "/" }] : [];
+  parts.forEach((part, index) => {
+    const prefix = parts.slice(0, index + 1).join("/");
+    crumbs.push({ label: part, path: absolute ? `/${prefix}` : prefix });
+  });
+  return crumbs;
 }
 
 export function FolderPathField({ value, mode = "image_folder", onChange, onBrowse, required = false }: { value: string; mode?: "video" | "image_folder"; onChange: (path: string) => void; onBrowse: () => void; required?: boolean }) {
@@ -1002,11 +1022,79 @@ export function FolderPathField({ value, mode = "image_folder", onChange, onBrow
 export function FileManagerDialog({ mode, initialPath, onSelect, onClose }: { mode: "video" | "image_folder"; initialPath: string; onSelect: (path: string) => void; onClose: () => void }) {
   const [browser, setBrowser] = useState<FileBrowserResult | null>(null);
   const [browserError, setBrowserError] = useState("");
-  const [path, setPath] = useState(initialPath);
-  useEffect(() => { setBrowserError(""); api.fileBrowser(path, mode).then((result) => { setBrowser(result); if (!path) setPath(result.path); }).catch((reason) => setBrowserError(reason instanceof Error ? reason.message : String(reason))); }, [path, mode]);
-  const visibleEntries = (browser?.entries ?? []).filter((entry) => entry.kind === "directory" || (mode === "video" && entry.selectable));
-  const navigate = () => { setBrowserError(""); void api.fileBrowser(path, mode).then((result) => { setBrowser(result); setPath(result.path); }).catch((reason) => setBrowserError(reason instanceof Error ? reason.message : String(reason))); };
-  return <div className="modal-backdrop"><div className="file-manager"><div className="sidebar-header"><div><h2>Choose a {mode === "image_folder" ? "folder" : "video"}</h2><p className="muted">Navigate to the container-visible location, then confirm the folder or select one video file.</p></div><button className="secondary action-neutral" type="button" onClick={onClose}>Close</button></div><FileManagerShortcuts shortcuts={browser?.shortcuts ?? []} currentPath={browser?.path ?? path} onSelect={setPath} /><div className="folder-navigation"><label><span>Current location</span><input value={path} onChange={(event) => setPath(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); navigate(); } }} /></label><button type="button" className="secondary action-navigate folder-go" onClick={navigate}>Open path</button></div>{browserError && <p className="review-error" role="alert">{browserError}</p>}{mode === "image_folder" && browser ? <div className="folder-selection-row"><span className="muted">{browser.current_match_count > 0 ? `${browser.current_match_count} supported images in this folder` : "No supported images in this folder"}</span><button type="button" className="primary action-assign" disabled={browser.current_match_count < 1} onClick={() => onSelect(browser.path)}>Use this folder</button></div> : null}<div className="file-list" aria-label="Folders">{visibleEntries.map((entry) => <button key={entry.path} type="button" className={entry.selectable ? "file-row selectable" : "file-row"} onClick={() => entry.kind === "directory" ? setPath(entry.path) : onSelect(entry.path)}><FolderOpen size={18} aria-hidden="true" /><strong>{entry.name}</strong>{entry.kind === "file" ? <span>Select video</span> : null}</button>)}</div></div></div>;
+  const [draftPath, setDraftPath] = useState(initialPath);
+  const [loading, setLoading] = useState(true);
+  const [navigation, setNavigation] = useState<{ items: string[]; index: number }>({ items: [], index: -1 });
+  const browseRequestRef = useRef(0);
+
+  async function openPath(nextPath: string, recordHistory = true) {
+    const requestId = ++browseRequestRef.current;
+    setLoading(true);
+    setBrowserError("");
+    try {
+      const result = await api.fileBrowser(nextPath, mode);
+      if (requestId !== browseRequestRef.current) return;
+      setBrowser(result);
+      setDraftPath(result.path);
+      if (recordHistory) {
+        setNavigation((current) => {
+          if (current.items[current.index] === result.path) return current;
+          const items = [...current.items.slice(0, current.index + 1), result.path];
+          return { items, index: items.length - 1 };
+        });
+      }
+    } catch (reason) {
+      if (requestId !== browseRequestRef.current) return;
+      setBrowserError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      if (requestId === browseRequestRef.current) setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void openPath(initialPath);
+    // The initial location is intentionally loaded once per mode/open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  const currentPath = browser?.path ?? draftPath;
+  const breadcrumbs = filePathBreadcrumbs(currentPath);
+  const directories = (browser?.entries ?? []).filter((entry) => entry.kind === "directory");
+  const matchingFiles = (browser?.entries ?? []).filter((entry) => entry.kind === "file");
+  const moveHistory = (offset: number) => {
+    const nextIndex = navigation.index + offset;
+    const target = navigation.items[nextIndex];
+    if (!target) return;
+    setNavigation((current) => ({ ...current, index: nextIndex }));
+    void openPath(target, false);
+  };
+
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}><div className="file-manager" role="dialog" aria-modal="true" aria-labelledby="file-manager-title">
+    <header className="file-manager-header"><div><span className="eyebrow">Local workspace</span><h2 id="file-manager-title">Choose a {mode === "image_folder" ? "folder of images" : "video file"}</h2><p className="muted">Browse container-visible folders, verify their contents, then confirm your selection.</p></div><button className="file-manager-close" type="button" aria-label="Close file manager" onClick={onClose}><X size={20} /></button></header>
+    <div className="file-manager-toolbar">
+      <div className="file-nav-actions" aria-label="Folder history"><button type="button" aria-label="Go back" disabled={navigation.index <= 0 || loading} onClick={() => moveHistory(-1)}><ArrowLeft size={17} /></button><button type="button" aria-label="Go forward" disabled={navigation.index < 0 || navigation.index >= navigation.items.length - 1 || loading} onClick={() => moveHistory(1)}><ArrowRight size={17} /></button>{browser?.parent ? <button type="button" className="up-folder-button" disabled={loading} onClick={() => void openPath(browser.parent ?? "")}><FolderOpen size={17} />Up</button> : null}</div>
+      <nav className="path-breadcrumbs" aria-label="Current folder">{breadcrumbs.map((crumb, index) => <span key={crumb.path}><button type="button" title={crumb.path} disabled={loading || crumb.path === currentPath} onClick={() => void openPath(crumb.path)}>{crumb.label}</button>{index < breadcrumbs.length - 1 ? <ChevronRight size={14} aria-hidden="true" /> : null}</span>)}</nav>
+    </div>
+    <div className="file-manager-body">
+      <aside className="file-manager-sidebar"><FileManagerShortcuts shortcuts={browser?.shortcuts ?? []} currentPath={currentPath} onSelect={(nextPath) => void openPath(nextPath)} /></aside>
+      <section className="file-manager-content">
+        <div className="folder-navigation"><label><span>Path</span><input value={draftPath} spellCheck={false} onChange={(event) => setDraftPath(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void openPath(draftPath); } }} /></label><button type="button" className="secondary action-navigate folder-go" disabled={loading} onClick={() => void openPath(draftPath)}>{loading ? "Opening…" : "Open path"}</button></div>
+        {browserError ? <p className="review-error" role="alert">{browserError}</p> : null}
+        <div className="folder-selection-row"><div><strong>{mode === "image_folder" ? "Current folder" : "Select a video below"}</strong><span>{mode === "image_folder" ? `${browser?.current_match_count ?? 0} supported image${browser?.current_match_count === 1 ? "" : "s"}` : `${matchingFiles.length} supported video${matchingFiles.length === 1 ? "" : "s"}`}</span></div>{mode === "image_folder" ? <button type="button" className="primary action-assign" disabled={loading || !browser || browser.current_match_count < 1} onClick={() => browser && onSelect(browser.path)}>Select this folder</button> : null}</div>
+        <section className="file-list" aria-label="Folder contents">
+          {loading && !browser ? <p className="file-manager-empty"><LoaderCircle className="spin" size={18} />Loading folder…</p> : null}
+          {!loading && directories.length === 0 && matchingFiles.length === 0 ? <p className="file-manager-empty">This folder has no visible subfolders or supported files.</p> : null}
+          {directories.map((entry) => <button key={entry.path} type="button" className={`file-row ${entry.selectable ? "selectable" : ""}`} onClick={() => void openPath(entry.path)}><span className="file-icon"><Folder size={19} aria-hidden="true" /></span><span className="file-row-copy"><strong>{entry.name}</strong><small>Folder</small></span><span className={`file-count-badge ${entry.match_count > 0 ? "has-files" : ""}`}>{entry.match_count > 0 ? `${entry.match_count} ${mode === "image_folder" ? "images" : "videos"}` : "Open"}</span><ChevronRight size={17} aria-hidden="true" /></button>)}
+          {matchingFiles.map((entry) => mode === "video" ? <button key={entry.path} type="button" className="file-row selectable" onClick={() => onSelect(entry.path)}><span className="file-icon video"><Film size={19} aria-hidden="true" /></span><span className="file-row-copy"><strong>{entry.name}</strong><small>Video file</small></span><span className="file-select-label">Select</span></button> : <div key={entry.path} className="file-row image-file"><span className="file-icon image"><FileImage size={19} aria-hidden="true" /></span><span className="file-row-copy"><strong>{entry.name}</strong><small>Supported image</small></span></div>)}
+        </section>
+      </section>
+    </div>
+  </div></div>;
 }
 
 function SchemaPage({ project, t }: { project: Project; t: (key: string) => string }) {

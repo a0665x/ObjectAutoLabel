@@ -5,7 +5,7 @@ import type { ComponentType } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as AppModule from "./App";
-import { AugmentationBuildSummary, AugmentationControlPanel, AugmentationEffectModal, AugmentationPreviewCard, ConversionPackageSummary, ConversionTargetMatrix, DatasetLineageChain, ExportPackageSummary, FileManagerShortcuts, FolderPathField, HelpTooltip, InferencePreviewCard, ModelSourceSelector, ParameterHelp, ProcessingButton, ProjectArtifactContextPanel, ProjectStorageStatusCard, PseudoDependencyGraph, PseudoGenerateFeedbackPanel, SchemaClassMap, SchemaHistorySelector, SchemaTreeEditorPreview, SettingsPage, TaskCenter, TrainingInputSummary, TrainingLossChart, TrainingRunSummary, ValidationRandomButton, WorkflowGuide, WorkflowTimeline, ViewportToggle, buildAugmentationDraftStorageKey, buildTaskCenterItems, chooseLatestBuildSelection, datasetSplitImageCount, datasetSplitLineageLabel, datasetSplitOptionLabel, firstSupportedWorldModel, loadAugmentationDraft, parseTrainingMetrics, reconcileLocalPseudoJob, saveAugmentationDraft, shouldRefreshArtifactsAfterSourceProcessing, supportedWorldModels, worldModelLabel } from "./App";
+import { AugmentationBuildSummary, AugmentationControlPanel, AugmentationEffectModal, AugmentationPreviewCard, ConversionPackageSummary, ConversionTargetMatrix, DatasetLineageChain, ExportPackageSummary, FileManagerDialog, FileManagerShortcuts, FolderPathField, HelpTooltip, InferencePreviewCard, ModelSourceSelector, ParameterHelp, ProcessingButton, ProjectArtifactContextPanel, ProjectStorageStatusCard, PseudoDependencyGraph, PseudoGenerateFeedbackPanel, SchemaClassMap, SchemaHistorySelector, SchemaTreeEditorPreview, SettingsPage, TaskCenter, TrainingInputSummary, TrainingLossChart, TrainingRunSummary, ValidationRandomButton, WorkflowGuide, WorkflowTimeline, ViewportToggle, buildAugmentationDraftStorageKey, buildTaskCenterItems, chooseLatestBuildSelection, datasetSplitImageCount, datasetSplitLineageLabel, datasetSplitOptionLabel, filePathBreadcrumbs, firstSupportedWorldModel, loadAugmentationDraft, parseTrainingMetrics, reconcileLocalPseudoJob, saveAugmentationDraft, shouldRefreshArtifactsAfterSourceProcessing, supportedWorldModels, worldModelLabel } from "./App";
 import { api, buildDatasetSplitSamplesPath, type AugmentationPreviewSample, type FileBrowserShortcut } from "./api/client";
 import type { ClassSchema, Job, ModelLists, Project, TrainingRun } from "./types";
 
@@ -82,11 +82,57 @@ describe("FileManagerShortcuts", () => {
 
     const html = renderToStaticMarkup(<FileManagerShortcuts shortcuts={shortcuts} currentPath="" onSelect={() => undefined} />);
 
-    expect(html).toContain("Common folders");
+    expect(html).toContain("Places");
     expect(html).toContain("0629 raw data");
     expect(html).not.toContain("190 matches");
     expect(html).toContain("Project input/0629");
     expect(html).toContain("missing");
+  });
+});
+
+describe("FileManagerDialog", () => {
+  it("navigates folders, shows image contents, and confirms the current folder", async () => {
+    const fileBrowser = vi.spyOn(api, "fileBrowser")
+      .mockResolvedValueOnce({
+        path: "/data/input",
+        parent: "/data",
+        mode: "image_folder",
+        current_match_count: 0,
+        shortcuts: [{ label: "Input", path: "/data/input", description: "Input data", exists: true, match_count: 0 }],
+        entries: [{ name: "dataset-a", path: "/data/input/dataset-a", kind: "directory", selectable: true, match_count: 2 }]
+      })
+      .mockResolvedValueOnce({
+        path: "/data/input/dataset-a",
+        parent: "/data/input",
+        mode: "image_folder",
+        current_match_count: 2,
+        shortcuts: [{ label: "Input", path: "/data/input", description: "Input data", exists: true, match_count: 0 }],
+        entries: [
+          { name: "one.jpg", path: "/data/input/dataset-a/one.jpg", kind: "file", selectable: false, match_count: 1 },
+          { name: "two.png", path: "/data/input/dataset-a/two.png", kind: "file", selectable: false, match_count: 1 }
+        ]
+      });
+    const onSelect = vi.fn();
+
+    render(<FileManagerDialog mode="image_folder" initialPath="/data/input" onSelect={onSelect} onClose={() => undefined} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /dataset-a/i }));
+    expect(await screen.findByText("one.jpg")).toBeTruthy();
+    expect(screen.getByText("two.png")).toBeTruthy();
+    expect(screen.getByText("2 supported images")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Select this folder" }));
+
+    expect(onSelect).toHaveBeenCalledWith("/data/input/dataset-a");
+    expect(fileBrowser).toHaveBeenNthCalledWith(2, "/data/input/dataset-a", "image_folder");
+  });
+
+  it("builds clickable folder breadcrumbs from an absolute path", () => {
+    expect(filePathBreadcrumbs("/data/input/dataset-a")).toEqual([
+      { label: "Root", path: "/" },
+      { label: "data", path: "/data" },
+      { label: "input", path: "/data/input" },
+      { label: "dataset-a", path: "/data/input/dataset-a" }
+    ]);
   });
 });
 
@@ -619,7 +665,7 @@ describe("dataset build lineage helpers", () => {
     const { container } = render(<SplitPage project={testProject} jobs={[]} refreshJobs={async () => undefined} t={(key) => key} artifactRevision={0} />);
 
     const sourceSelect = await screen.findByLabelText("Augment version") as HTMLSelectElement;
-    const outdatedOption = screen.getByRole("option", { name: /Outdated — rebuild required/i }) as HTMLOptionElement;
+    const outdatedOption = await screen.findByRole("option", { name: /Outdated — rebuild required/i }) as HTMLOptionElement;
     expect(outdatedOption.disabled).toBe(true);
     expect(sourceSelect.value).toBe("");
 

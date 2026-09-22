@@ -13,6 +13,7 @@ import {
   Folder,
   FolderInput,
   FolderOpen,
+  Github,
   GripHorizontal,
   HelpCircle,
   ChevronRight,
@@ -108,6 +109,7 @@ export function LoginScreen({ status }: { status: AuthStatus }) {
             <span>{status.error ?? "Add at least one provider client ID/secret and restart the service."}</span>
           </div>
         )}
+        <a className="source-code-link auth-source-link" href="https://github.com/a0665x/ObjectAutoLabel" target="_blank" rel="noreferrer"><Github size={16} aria-hidden="true" /><span>AGPL-3.0 · Source code</span></a>
       </section>
     </main>
   );
@@ -285,6 +287,7 @@ export function App() {
             );
           })}
         </nav>
+        <a className="source-code-link" href="https://github.com/a0665x/ObjectAutoLabel" target="_blank" rel="noreferrer"><Github size={16} aria-hidden="true" /><span>AGPL-3.0 · Source code</span></a>
       </aside>
       <main className="workspace">
         <header className="topbar">

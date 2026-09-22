@@ -2,6 +2,11 @@
 
 The WebUI is a React/Vite single-page console served by FastAPI.
 
+The login card and authenticated sidebar expose a prominent `AGPL-3.0 · Source
+code` link to the official corresponding source repository. Operators serving
+a modified fork must change that link to the corresponding source for their
+deployed version.
+
 When OAuth authentication is enabled, the application opens on a provider chooser for the configured Google, Facebook, and/or LINE adapters. After sign-in, the former `OA` brand mark becomes the signed-in user's profile image with a user-icon fallback and an explicit sign-out action. The language control is labeled `Language` instead of relying on the ambiguous language glyph.
 
 ## Screens

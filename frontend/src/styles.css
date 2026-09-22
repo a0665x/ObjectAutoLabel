@@ -255,6 +255,33 @@ button { cursor: pointer; }
   background: transparent;
 }
 
+.source-code-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  margin: 18px 6px 0;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.74);
+  font-size: 0.78rem;
+  font-weight: 760;
+  text-decoration: none;
+}
+
+.source-code-link:hover,
+.source-code-link:focus-visible {
+  border-color: rgba(10, 132, 255, 0.4);
+  color: #075ca8;
+  background: #fff;
+}
+
+.auth-source-link {
+  margin: 0;
+}
+
 .nav button.active, .nav button:hover {
   background: #fff;
   box-shadow: 0 8px 20px rgba(20, 25, 31, 0.07);

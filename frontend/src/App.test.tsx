@@ -5,7 +5,7 @@ import type { ComponentType } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as AppModule from "./App";
-import { AugmentationBuildSummary, AugmentationControlPanel, AugmentationEffectModal, AugmentationPreviewCard, ConversionPackageSummary, ConversionTargetMatrix, DatasetLineageChain, ExportPackageSummary, FileManagerDialog, FileManagerShortcuts, FolderPathField, HelpTooltip, InferencePreviewCard, ModelSourceSelector, ParameterHelp, ProcessingButton, ProjectArtifactContextPanel, ProjectStorageStatusCard, PseudoDependencyGraph, PseudoGenerateFeedbackPanel, SchemaClassMap, SchemaHistorySelector, SchemaTreeEditorPreview, SettingsPage, TaskCenter, TrainingInputSummary, TrainingLossChart, TrainingRunSummary, ValidationRandomButton, WorkflowGuide, WorkflowTimeline, ViewportToggle, buildAugmentationDraftStorageKey, buildTaskCenterItems, chooseLatestBuildSelection, datasetSplitImageCount, datasetSplitLineageLabel, datasetSplitOptionLabel, filePathBreadcrumbs, firstSupportedWorldModel, loadAugmentationDraft, parseTrainingMetrics, reconcileLocalPseudoJob, saveAugmentationDraft, shouldRefreshArtifactsAfterSourceProcessing, supportedWorldModels, worldModelLabel } from "./App";
+import { AugmentationBuildSummary, AugmentationControlPanel, AugmentationEffectModal, AugmentationPreviewCard, ConversionPackageSummary, ConversionTargetMatrix, DatasetLineageChain, ExportPackageSummary, FileManagerDialog, FileManagerShortcuts, FolderPathField, HelpTooltip, InferencePreviewCard, LoginScreen, ModelSourceSelector, ParameterHelp, ProcessingButton, ProjectArtifactContextPanel, ProjectStorageStatusCard, PseudoDependencyGraph, PseudoGenerateFeedbackPanel, SchemaClassMap, SchemaHistorySelector, SchemaTreeEditorPreview, SettingsPage, TaskCenter, TrainingInputSummary, TrainingLossChart, TrainingRunSummary, ValidationRandomButton, WorkflowGuide, WorkflowTimeline, ViewportToggle, buildAugmentationDraftStorageKey, buildTaskCenterItems, chooseLatestBuildSelection, datasetSplitImageCount, datasetSplitLineageLabel, datasetSplitOptionLabel, filePathBreadcrumbs, firstSupportedWorldModel, loadAugmentationDraft, parseTrainingMetrics, reconcileLocalPseudoJob, saveAugmentationDraft, shouldRefreshArtifactsAfterSourceProcessing, supportedWorldModels, worldModelLabel } from "./App";
 import { api, buildDatasetSplitSamplesPath, type AugmentationPreviewSample, type FileBrowserShortcut } from "./api/client";
 import type { ClassSchema, Job, ModelLists, Project, TrainingRun } from "./types";
 
@@ -13,6 +13,14 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   window.localStorage.clear();
+});
+
+describe("AGPL source offer", () => {
+  it("keeps a prominent corresponding-source link on the login screen", () => {
+    render(<LoginScreen status={{ enabled: true, authenticated: false, providers: [] }} />);
+    const link = screen.getByRole("link", { name: "AGPL-3.0 · Source code" });
+    expect(link.getAttribute("href")).toBe("https://github.com/a0665x/ObjectAutoLabel");
+  });
 });
 
 describe("worldModelLabel", () => {

@@ -334,3 +334,47 @@ x86_64/desktop CUDA image and includes its FP32 conversion stack, while
 not copy one file over the other; rebuild the selected image after
 intentionally changing its dependency file. Neither runtime installs converter
 packages on demand.
+
+## License and source availability
+
+ObjectAutoLabel is licensed under the [GNU Affero General Public License v3.0](LICENSE).
+You may use, study, modify, and redistribute it under the terms of that
+license. The complete source for the official public build is available at
+[github.com/a0665x/ObjectAutoLabel](https://github.com/a0665x/ObjectAutoLabel).
+Historical revisions remain governed by the license file distributed with
+those revisions; this license change does not retroactively withdraw rights
+already granted for earlier copies.
+
+If you operate a modified version over a network, you must preserve a prominent
+source-code offer and provide the complete corresponding source for the exact
+version users interact with, as required by AGPL-3.0 section 13. This includes
+your application changes and the scripts and configuration needed to build and
+run that version. Operators publishing a fork should update the in-app source
+link to point to their corresponding source.
+
+### Ultralytics attribution
+
+This project uses the
+[Ultralytics](https://github.com/ultralytics/ultralytics) Python package for
+YOLO training, validation, inference, and model export. Ultralytics software
+and its default model licensing are AGPL-3.0 unless a separate Ultralytics
+commercial license applies. See the
+[Ultralytics licensing page](https://www.ultralytics.com/license) and its
+[AGPL-3.0 terms](https://www.ultralytics.com/legal/agpl-3-0-software-license).
+
+Ultralytics states that pretrained models and models produced or fine-tuned
+with its training code are covered by its AGPL-3.0 licensing by default.
+Anyone distributing or deploying trained `.pt`, ONNX, LiteRT/TFLite, or other
+exported artifacts should therefore provide the applicable corresponding
+source under AGPL-3.0 or obtain an appropriate Ultralytics Enterprise/R&D
+license for proprietary use.
+
+### Third-party models and datasets
+
+AGPL-3.0 licensing of ObjectAutoLabel does not relicense datasets, pretrained
+weights, model architectures, prompt encoders, fonts, or other third-party
+assets. Each asset keeps its own copyright, license, attribution, commercial
+use, privacy, and redistribution conditions. Operators are responsible for
+checking those terms before downloading, training, publishing, or selling a
+model. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the primary
+dependency notice.

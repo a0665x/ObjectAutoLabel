@@ -1,4 +1,7 @@
 {
+  "name": "object-autolabel-frontend",
+  "private": true,
+  "license": "AGPL-3.0-only",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",

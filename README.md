@@ -10,9 +10,10 @@ http://127.0.0.1:8501/
 
 ## Interface Preview
 
-[![Open the interactive screenshot slideshow](demo_imgs/pseudo_label_page.png)](https://a0665x.github.io/ObjectAutoLabel/)
+![ObjectAutoLabel interface preview cycling through five workflow screens](demo_imgs/interface_preview.gif)
 
-[Open slideshow →](https://a0665x.github.io/ObjectAutoLabel/) — browse all five screens in one window with left/right navigation, a slide bar, and playback controls. GitHub README does not support interactive scripts, so the slideshow opens on a separate page.
+The preview cycles through Pseudo Label, confidence review, bounding-box editing,
+CUDA training, and model conversion/export without leaving this README.
 
 ## Start
 

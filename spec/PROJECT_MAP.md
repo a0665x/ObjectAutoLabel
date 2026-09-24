@@ -33,6 +33,7 @@ files before editing behavior.
 | Model Convert, ONNX, LiteRT, architecture support | [UI](UI.md), [API](API.md), [Runtime](RUNTIME.md) | [Current conversion boundary](references/model-conversion-current.md) |
 | Stream Demo, webcam, uploaded video, inference engines, model version labels | [UI](UI.md), [API](API.md), [Runtime](RUNTIME.md) | [Stream Demo and model provenance](references/stream-demo.md) |
 | CLI terminal, editable Python utilities, staged inference plugins | [API](API.md), [Runtime](RUNTIME.md) | [Docker CLI workspace](references/cli-workspace.md) |
+| Workflow Assign, saved combinations, draggable Split inputs | [UI](UI.md), [API](API.md), [Data Model](DATA_MODEL.md) | [Workflow assignments and compositions](references/workflow-assignments-and-compositions.md) |
 | Project files, split lineage, stale artifacts | [Data Model](DATA_MODEL.md), [API](API.md) | [Review editing and image removal](references/review-editing-and-image-removal.md) |
 | Open Data, VisDrone, mapping, shared cache, source filters, Current Split | [UI](UI.md), [API](API.md), [Data Model](DATA_MODEL.md), [Testing](TESTING.md) | [Open Data import and Current Split](references/open-data-import-and-current-split.md), [LLM-assisted Open Data roadmap](references/llm-assisted-open-data-and-auth-roadmap.md) |
 | Sign-in, Google/Facebook/LINE OAuth, future user ownership | [Architecture](ARCHITECTURE.md), [API](API.md), [Runtime](RUNTIME.md), [UI](UI.md) | [LLM-assisted Open Data and authentication roadmap](references/llm-assisted-open-data-and-auth-roadmap.md) |

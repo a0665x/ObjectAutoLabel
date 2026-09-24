@@ -541,4 +541,32 @@ def initialize_schema(db: sqlite3.Connection) -> None:
         )
         """
     )
+    db.executescript("""
+        create table if not exists dataset_compositions (
+            id text primary key,
+            project_id text not null references projects(id) on delete cascade,
+            name text not null,
+            pseudo_label_run_id text,
+            augmentation_run_id text,
+            open_data_import_id text,
+            created_at text not null
+        );
+        create table if not exists workflow_states (
+            project_id text primary key references projects(id) on delete cascade,
+            assignments_json text not null default '{}',
+            composition_id text
+        );
+    """)
+    split_columns = {row["name"] for row in db.execute("pragma table_info(dataset_splits)").fetchall()}
+    for name in ("composition_id", "composition_json"):
+        if name not in split_columns:
+            db.execute(f"alter table dataset_splits add column {name} text")
+    db.executescript("""
+        create table if not exists pseudo_image_snapshots (
+            run_id text not null references pseudo_label_runs(id) on delete cascade,
+            image_id text not null references images(id) on delete cascade,
+            annotations_json text not null,
+            primary key (run_id, image_id)
+        );
+    """)
     db.commit()

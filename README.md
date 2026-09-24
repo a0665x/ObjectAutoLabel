@@ -303,13 +303,23 @@ browser refresh.
 4. Review: inspect the confidence map and adaptive object-size distribution, then spot-check/edit boxes. After zooming, drag empty image space to pan; Shift+drag selects boxes and dragging a box moves it. Right-click actions open beside the pointer. Labeled data remains trainable without checked/not-checked status gates.
 5. Augment: choose `Skip augment` for a source/pass-through build, or create x3/x5/x8/x10 augmented builds.
 6. Open Data (optional): use built-in VisDrone or paste one Ultralytics Platform Dataset URL. Compatible Detect datasets reuse the same class mapping, percentage, preview, Review, version and Split flow; other task types are blocked before download.
-7. Split: choose the project source/augment condition and build or update Current Split. Active Open Data is added automatically while preserving official train/validation groups.
-8. Train: name the run, choose the input model and optimizer (SGD, MuSGD, Adam, or AdamW), and watch box/class/DFL loss charts. Train automatically uses the valid Current Split; Review/Open Data changes require rebuilding it.
+7. Split: drag saved Pseudo, Augment and optional Open Data modules into a composition (or use the selection buttons). Inspect counts/settings, name it, then **Save & assign composition** and **Build New Split Version**. Augment brings its recorded Pseudo parent; only the chosen Open Data version is added, preserving official train/validation groups.
+8. Train: name the run, choose the input model and optimizer (SGD, MuSGD, Adam, or AdamW), and watch box/class/DFL loss charts. Choose an assigned or another saved, non-outdated Split version. Review/Open Data changes may require a new Split.
 9. Validate: choose a current-project model source and run random-sample inference.
 10. Convert / Export: on x86_64, create ONNX FP32 and/or LiteRT FP32 conversion packages with schema metadata and Netron preview, then download one structured ZIP containing native PT, converted artifacts, training evidence, arguments, classes, and metadata. On Jetson/aarch64, copy the `.pt` checkpoint to an x86_64 host and convert it there.
 11. Stream Demo: run a supported PT, ONNX, or LiteRT artifact against a host camera or uploaded video with live confidence and IoU controls.
 
-Producing steps retain lineage. Open Data is one active import per project, and new training intentionally exposes only one Current Split to avoid ambiguous runtime choices.
+Producing steps retain lineage. **Assign & history** at the page footer persists
+version choices across tabs and reloads. Assigned project cards have a red
+outline. Saved combinations can be reassigned or deleted; deleting a combination
+keeps its built Split snapshots and training results. Deleting a build instead
+removes its dependent downstream history after confirmation.
+
+Each composition uses one Pseudo → optional Augment branch plus one optional
+Open Data version. New Pseudo runs retain annotation snapshots for historical
+Augment/Split inputs. If a legacy Pseudo run's original labels were already
+overwritten, use its retained Augment build or regenerate Pseudo. Review edits
+the live image queue; assigning an old Pseudo version selects downstream input.
 
 Model conversion is intentionally x86_64 FP32-only. Converter dependencies are installed when the desktop image is built, and Ultralytics package auto-install is disabled; a conversion request never installs packages at runtime. Existing historical package rows remain readable even if they contain formats or precisions that are no longer offered for new conversions.
 

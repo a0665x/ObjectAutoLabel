@@ -20,7 +20,7 @@ import yaml
 
 from .artifact_naming import versioned_artifact_name
 from .job_control import JobCancelled, raise_if_cancelled
-from .label_io import AnnotationRow, write_yolo_labels
+from .label_io import AnnotationRow, read_yolo_labels, write_yolo_labels
 from .db import transaction
 from .repositories import Repository, new_id
 from .conversion_runtime import (
@@ -631,6 +631,8 @@ def save_image_annotations(
         raise FileNotFoundError(f"Image not found: {image_id}")
     _validate_annotation_bounds(annotations)
     saved = repo.replace_image_annotations(image_id, annotations, review_status)
+    if image.get("pseudo_label_run_id") and not image.get("augmentation_run_id"):
+        repo.snapshot_pseudo_images(image["pseudo_label_run_id"], [image_id])
     image_path = Path(image["path"])
     project = repo.get_project(image["project_id"])
     assert project is not None
@@ -660,6 +662,12 @@ OUTDATED_AUGMENTATION_SPLIT_MESSAGE = "Augmentation run is outdated; rebuild Aug
 CHANGED_SPLIT_SOURCE_MESSAGE = "A source image was removed or changed while the split was being built; retry the split."
 
 
+def _build_annotations(repo: Repository, image: dict[str, Any]) -> list[dict[str, Any]]:
+    if image.get("snapshot_annotations") is not None:
+        return json.loads(image["snapshot_annotations"])
+    return repo.list_annotations(image["id"])
+
+
 def validate_dataset_split_augmentation(
     repo: Repository,
     project_id: str,
@@ -687,7 +695,19 @@ def create_dataset_split(
     open_data_import_id: str | None = None,
     *,
     job_id: str,
+    composition_id: str | None = None,
 ) -> dict[str, Any]:
+    from .workflow import validate_recipe
+    composition = None
+    if composition_id:
+        record = repo.db.execute('select * from dataset_compositions where id = ? and project_id = ?', (composition_id, project_id)).fetchone()
+        if record is None:
+            raise ValueError("Composition no longer exists in this project")
+        composition = dict(record)
+        recipe = validate_recipe(repo, project_id, composition)
+        pseudo_label_run_id = recipe['pseudo_label_run_id']
+        augmentation_run_id = recipe['augmentation_run_id']
+        open_data_import_id = recipe['open_data_import_id']
     if round(train_ratio + val_ratio + test_ratio, 6) != 1.0:
         raise ValueError("Split ratios must add up to 1.0")
     project = repo.get_project(project_id)
@@ -700,6 +720,8 @@ def create_dataset_split(
     if augmentation_run_id:
         augmentation_run = validate_dataset_split_augmentation(repo, project_id, augmentation_run_id)
         assert augmentation_run is not None
+        if pseudo_label_run_id and pseudo_label_run_id != augmentation_run.get("pseudo_label_run_id"):
+            raise ValueError("Augment and Pseudo versions have different lineage")
         if pseudo_label_run_id is None:
             pseudo_label_run_id = augmentation_run.get("pseudo_label_run_id")
     outdated_augmentation_ids = {
@@ -710,14 +732,16 @@ def create_dataset_split(
     # Training should use every image that currently has labels, regardless of
     # whether a human has reviewed it. The review UI now tracks a checked ratio;
     # it is not a gate that blocks pseudo-labeled data from training.
+    candidates = repo.pseudo_build_images(project_id, pseudo_label_run_id) if pseudo_label_run_id and not augmentation_run_id else repo.list_images(project_id, limit=100000, offset=0)
     project_images = [
         image
-        for image in repo.list_images(project_id, limit=100000, offset=0)
+        for image in candidates
         if image.get("source_origin") != "open_data"
-        and repo.list_annotations(image["id"])
-        and (pseudo_label_run_id is None or image.get("pseudo_label_run_id") == pseudo_label_run_id)
+        and _build_annotations(repo, image)
+        and (pseudo_label_run_id is None or "snapshot_annotations" in image or image.get("pseudo_label_run_id") == pseudo_label_run_id)
         and (augmentation_run_id is None or image.get("augmentation_run_id") == augmentation_run_id)
         and image.get("augmentation_run_id") not in outdated_augmentation_ids
+        and (not composition_id or augmentation_run_id is not None or (pseudo_label_run_id is not None and image.get("augmentation_run_id") is None))
     ]
     random.Random(42).shuffle(project_images)
     open_data_import = None
@@ -734,11 +758,14 @@ def create_dataset_split(
     ).fetchall() if open_data_import_id else []
     open_data_images = [dict(image) for image in open_data_rows if repo.list_annotations(image["id"])]
     images = [*project_images, *open_data_images]
+    if composition_id and not images:
+        raise ValueError("Selected composition has no retained labeled images; choose a retained Augment build or regenerate Pseudo")
     output_dir = Path(project["root_path"]) / "splits" / name
     staging_dir = output_dir.parent / f".{output_dir.name}.{new_id()}.staging"
     backup_dir = output_dir.parent / f".{output_dir.name}.{new_id()}.backup"
     output_swap_completed = False
     buckets = {"train": [], "valid": [], "test": []}
+    image_manifest: dict[str, str] = {}
     train_cut = int(len(project_images) * train_ratio)
     val_cut = train_cut + int(len(project_images) * val_ratio)
     try:
@@ -751,7 +778,10 @@ def create_dataset_split(
             buckets[bucket].append(image["id"])
             image_path = Path(image["path"])
             target_image = staging_dir / bucket / "images" / image_path.name
-            target_label = staging_dir / bucket / "labels" / f"{image_path.stem}.txt"
+            if target_image.exists():
+                target_image = target_image.with_name(f"{image_path.stem}_{image['id']}{image_path.suffix}")
+            target_label = staging_dir / bucket / "labels" / f"{target_image.stem}.txt"
+            image_manifest[image["id"]] = target_image.name
             target_image.parent.mkdir(parents=True, exist_ok=True)
             target_label.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(image_path, target_image)
@@ -765,7 +795,7 @@ def create_dataset_split(
                         width=float(item["width"]),
                         height=float(item["height"]),
                     )
-                    for item in repo.list_annotations(image["id"])
+                    for item in _build_annotations(repo, image)
                 ],
             )
             progress = int((index + 1) / max(1, len(images)) * 100)
@@ -790,6 +820,7 @@ def create_dataset_split(
         ).fetchall() if schema_id else []
         names = {int(row["class_id"]): row["class_name"] for row in schema_rows}
         staging_dir.mkdir(parents=True, exist_ok=True)
+        (staging_dir / "image_manifest.json").write_text(json.dumps(image_manifest), encoding="utf-8")
         (staging_dir / "dataset.yaml").write_text(
             yaml.safe_dump(
                 {
@@ -809,6 +840,8 @@ def create_dataset_split(
         with repo.db.synchronized():
             try:
                 with transaction(repo.db):
+                    if composition:
+                        validate_recipe(repo, project_id, composition)
                     current_images: list[dict[str, Any]] = []
                     for source_image in images:
                         current_image = repo.get_image(source_image["id"])
@@ -854,6 +887,10 @@ def create_dataset_split(
                         open_data_import_id=open_data_import.get("id") if open_data_import else None,
                         job_id=job_id,
                     )
+                    if composition:
+                        repo.db.execute("update dataset_splits set composition_id = ?, composition_json = ? where id = ?", (composition_id, json.dumps(composition, sort_keys=True), split['id']))
+                        split['composition_id'] = composition_id
+                        split['composition_json'] = json.dumps(composition, sort_keys=True)
                 output_swap_completed = False
             except Exception as exc:
                 rollback_failures: list[Exception] = []
@@ -899,6 +936,12 @@ def list_dataset_split_samples(
         raise FileNotFoundError(f"Dataset split not found: {split_id}")
     limit = max(1, min(24, int(limit_per_bucket)))
     output_dir = Path(split["output_dir"])
+    manifest_path = output_dir / "image_manifest.json"
+    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+    yaml_path = output_dir / "dataset.yaml"
+    names = (yaml.safe_load(yaml_path.read_text()) or {}).get('names', {}) if yaml_path.exists() else {}
+    if isinstance(names, list):
+        names = dict(enumerate(names))
     buckets = json.loads(split.get("image_ids_json") or "{}")
     samples: dict[str, list[dict[str, Any]]] = {bucket: [] for bucket in SPLIT_BUCKETS}
     for bucket in SPLIT_BUCKETS:
@@ -910,7 +953,7 @@ def list_dataset_split_samples(
             if not image:
                 continue
             source_image = Path(image["path"])
-            split_image = output_dir / bucket / "images" / source_image.name
+            split_image = output_dir / bucket / "images" / manifest.get(image_id, source_image.name)
             served_path = split_image if split_image.exists() else source_image
             annotations = [
                 {
@@ -923,6 +966,9 @@ def list_dataset_split_samples(
                 }
                 for item in repo.list_annotations(image_id)
             ]
+            label_path = output_dir / bucket / "labels" / f"{split_image.stem}.txt"
+            if label_path.exists():
+                annotations = [dict(class_id=row.class_id, class_name=str(names.get(row.class_id, names.get(str(row.class_id), row.class_id))), x_center=row.x_center, y_center=row.y_center, width=row.width, height=row.height) for row in read_yolo_labels(label_path)]
             samples[bucket].append(
                 {
                     "bucket": bucket,
@@ -1040,9 +1086,9 @@ def _apply_augmentation_preview(
     return next_frame
 
 
-def _preview_annotations(repo: Repository, image_id: str, *, horizontal_flip: bool, vertical_flip: bool = False, rotation: float = 0, polarity: int = 1) -> list[dict[str, Any]]:
+def _preview_annotations(repo: Repository, image_id: str, *, horizontal_flip: bool, vertical_flip: bool = False, rotation: float = 0, polarity: int = 1, source_annotations: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     annotations: list[dict[str, Any]] = []
-    for item in repo.list_annotations(image_id):
+    for item in (source_annotations if source_annotations is not None else repo.list_annotations(image_id)):
         annotations.append(
             {
                 "class_id": int(item["class_id"]),
@@ -1167,12 +1213,14 @@ def create_image_augmentation_run(
     output_dir = Path(project["root_path"]) / "augmentations" / name
     images_dir = output_dir / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
+    candidates = repo.pseudo_build_images(project_id, pseudo_label_run_id) if pseudo_label_run_id else repo.list_images(project_id, limit=100000, offset=0)
     images = [
         image
-        for image in repo.list_images(project_id, limit=100000, offset=0)
+        for image in candidates
         if image.get("source_origin") != "open_data"
-        and repo.list_annotations(image["id"])
-        and (pseudo_label_run_id is None or image.get("pseudo_label_run_id") == pseudo_label_run_id)
+        and _build_annotations(repo, image)
+        and not image.get("augmentation_run_id")
+        and (pseudo_label_run_id is None or "snapshot_annotations" in image or image.get("pseudo_label_run_id") == pseudo_label_run_id)
     ]
     augmentation_run = repo.create_augmentation_run_record(
         project_id=project_id,
@@ -1226,7 +1274,7 @@ def create_image_augmentation_run(
             height, width = source.shape[:2]
             passthrough_image = repo.create_image(project_id, str(output_path), image.get("source_asset_id"), pseudo_label_run_id=pseudo_label_run_id, augmentation_run_id=augmentation_run["id"], width=width, height=height)
             next_annotations: list[dict[str, Any]] = []
-            for item in repo.list_annotations(image["id"]):
+            for item in _build_annotations(repo, image):
                 next_item = dict(item)
                 next_item.pop("id", None)
                 next_item["source_type"] = "source_passthrough"
@@ -1256,7 +1304,7 @@ def create_image_augmentation_run(
                 "box_motion_blur": sample_unsigned(box_motion_blur),
                 "rotation": sample_signed(rotation),
             }
-            source_annotations = _preview_annotations(repo, image["id"], horizontal_flip=flip_this_copy, vertical_flip=vertical_flip_this_copy, rotation=sampled["rotation"], polarity=1)
+            source_annotations = _preview_annotations(repo, image["id"], horizontal_flip=flip_this_copy, vertical_flip=vertical_flip_this_copy, rotation=sampled["rotation"], polarity=1, source_annotations=_build_annotations(repo, image))
             frame = _apply_augmentation_preview(
                 source,
                 brightness=sampled["brightness"],

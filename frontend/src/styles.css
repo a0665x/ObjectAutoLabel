@@ -3865,3 +3865,35 @@ button.file-row:hover {
 .histogram-bars .contains-current .histogram-bar { background:#fbbf24; }
 .histogram-bars small { font-size:.72rem; white-space:nowrap; }
 .histogram-bars b { font-size:.72rem; }
+
+/* Shared version assignment and dataset composition. */
+.project-card.is-assigned, .version-module.is-assigned, .history-row.is-assigned {
+  border: 2px solid var(--red);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 9%, transparent);
+}
+.assigned-badge { display: inline-flex; width: fit-content; padding: 6px 11px; border: 1px solid var(--red); border-radius: 999px; color: var(--ink); background: color-mix(in srgb, var(--red) 7%, var(--panel-solid)); font-size: 12px; overflow-wrap: anywhere; }
+.assignment-footer { margin-top: 24px; }
+.version-library, .composition-library { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.version-module { border: 1px solid var(--line); border-radius: 16px; padding: 16px; background: var(--panel-solid); display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.version-module[draggable="true"] { cursor: grab; }
+.version-module header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.version-module strong, .composition-slot strong { overflow-wrap: anywhere; }
+.version-module > span { color: var(--muted); font-size: 12px; }
+.version-module footer { margin-top: auto; }
+.version-settings { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 0; font-size: 12px; }
+.version-settings > div { min-width: 0; max-width: 100%; }
+.version-settings dt { color: var(--muted); }
+.version-settings dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+.composition-board { display: flex; flex-direction: column; gap: 20px; }
+.composition-slots { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.composition-slot { display: flex; flex-direction: column; gap: 12px; border: 2px dashed var(--line); border-radius: 16px; padding: 18px; min-width: 0; background: var(--paper); }
+.composition-slot.is-drop-target { border-color: var(--blue); background: color-mix(in srgb, var(--blue) 9%, var(--panel-solid)); }
+.slot-step { color: var(--muted); font-size: 13px; font-weight: 600; }
+.composition-total { font-weight: 600; margin: 0; }
+.composition-library > section { display: flex; flex-direction: column; gap: 12px; min-width: 0; max-height: 600px; overflow: auto; padding: 3px; }
+.composition-library .version-module.is-selected { border-color: var(--blue); }
+.composition-board .action-assign, .assignment-footer .action-assign { background: linear-gradient(135deg, color-mix(in srgb, var(--blue) 15%, white), color-mix(in srgb, var(--purple) 16%, white)); border: 1px solid color-mix(in srgb, var(--blue) 28%, var(--line)); color: var(--ink); border-radius: 12px; }
+.composition-history { display: flex; flex-direction: column; gap: 12px; }
+.assignment-footer .sidebar-header { flex-wrap: wrap; gap: 12px; }
+@media (max-width: 900px) { .version-library { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 650px) { .version-library, .composition-library, .composition-slots { grid-template-columns: minmax(0, 1fr); } .composition-library > section { max-height: 420px; } }

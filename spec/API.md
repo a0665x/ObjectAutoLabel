@@ -118,3 +118,9 @@ for the package and is not re-laid out by this selector.
 - Conversion packages require a class schema so model ids can always be mapped back to class names in `classes.json` and `metadata.json`.
 - Conversion dependencies are image-build dependencies on x86_64. Ultralytics auto-install is disabled, so API requests never install converter packages at runtime. Jetson/aarch64 does not carry the converter stack; copy the `.pt` checkpoint to x86_64 for conversion.
 - MuSGD remains a supported training optimizer and is unrelated to the conversion architecture restriction.
+
+## Shared workflow assignments
+
+Project assignments, saved dataset combinations, draggable Split recipes and
+Pseudo annotation snapshots are described in
+[Workflow assignments and compositions](references/workflow-assignments-and-compositions.md).

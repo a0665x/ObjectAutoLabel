@@ -103,6 +103,7 @@ class ImageRestoreResult(BaseModel):
 
 
 class DatasetSplitCreate(BaseModel):
+    composition_id: str | None = None
     name: str = "default"
     train_ratio: float = Field(0.8, gt=0, lt=1)
     val_ratio: float = Field(0.1, ge=0, lt=1)

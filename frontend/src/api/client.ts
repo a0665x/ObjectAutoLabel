@@ -1,3 +1,4 @@
+import type { WorkflowState, Stage, Recipe } from "../workflow/WorkflowState";
 import type { Annotation, AugmentationRun, AuthStatus, ClassSchema, DatasetSplitRun, ImageRemovalResult, ImageRestoreResult, Job, ModelConversionCapability, ModelConversionCreatePayload, ModelConversionRun, ModelExportBundle, ModelLists, ModelSource, OpenDataCatalogItem, OpenDataImport, OpenDataMapping, OpenDataPreview, Project, ProjectArtifactContext, ProjectImage, ProjectStorageStatus, PseudoLabelRun, ReviewImagePosition, SourceAsset, TrainingRun, WorldModelInfo } from "../types";
 
 export type ReviewStatus = "unreviewed" | "pending_review" | "needs_fix" | "reviewed" | "skipped";
@@ -162,6 +163,11 @@ async function requestBlob(path: string, init: RequestInit = {}): Promise<{ blob
 }
 
 export const api = {
+  workflowState: (id: string) => request<WorkflowState>(`/api/projects/${id}/workflow-state`),
+  assignWorkflow: (id: string, stage: Stage, artifact_id: string | null) => request<WorkflowState>(`/api/projects/${id}/workflow-state`, { method: "PUT", body: JSON.stringify({ stage, artifact_id }) }),
+  saveComposition: (id: string, payload: Recipe & { name: string }) => request<WorkflowState>(`/api/projects/${id}/compositions`, { method: "POST", body: JSON.stringify(payload) }),
+  assignComposition: (id: string, cid: string) => request<WorkflowState>(`/api/projects/${id}/compositions/${cid}/assign`, { method: "POST" }),
+  deleteComposition: (id: string, cid: string) => request<WorkflowState>(`/api/projects/${id}/compositions/${cid}`, { method: "DELETE" }),
   authStatus: () => request<AuthStatus>("/api/auth/status"),
   logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
   health: () => request<{ ok: boolean; project_root: string }>("/api/health"),

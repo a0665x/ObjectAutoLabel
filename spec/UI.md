@@ -139,3 +139,9 @@ The review workbench is not job-driven. It loads sources, class schemas, queue e
 - The top workflow area is not a raw progress-bar strip. It uses explicit step states (`Done`, `running`, `You are here`, `Not done yet`, `Needs attention`) plus a short next-step hint so operators know what is missing and what to do next.
 - Split ratios avoid browser `step` validation traps: train and validation accept 0.01 increments, test is computed automatically, and the visual stack always sums to 1.00.
 - Train loss visualization is split into three compact charts: Box loss, Class loss, and DFL loss. Each chart includes y-axis loss ticks, x-axis epoch ticks, data points, and a regression/trend line.
+
+## Shared workflow assignments
+
+Project assignments, saved dataset combinations, draggable Split recipes and
+Pseudo annotation snapshots are described in
+[Workflow assignments and compositions](references/workflow-assignments-and-compositions.md).

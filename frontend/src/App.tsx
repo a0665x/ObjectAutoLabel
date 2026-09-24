@@ -1,3 +1,5 @@
+import { WorkflowProvider, AssignmentFooter, useWorkflow } from "./workflow/WorkflowState";
+import { CompositionBoard } from "./workflow/CompositionBoard";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -339,6 +341,7 @@ export function App() {
           } : undefined}
           onNavigate={navigateToPage}
         />
+        <WorkflowProvider key={activeProject?.id ?? "none"} projectId={activeProject?.id ?? ""} revision={`${artifactRevision}:${jobs.map(job => `${job.id}:${job.status}`).join("|")}`}>
         {page === "projects" && <ProjectsPage t={t} refresh={refresh} projects={projects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} jobs={jobs} />}
         {page === "sources" && activeProject && <SourcesPage t={t} project={activeProject} refresh={refresh} refreshArtifacts={() => refreshProjectArtifacts(activeProject.id)} />}
         {page === "schema" && activeProject && <SchemaPage t={t} project={activeProject} />}
@@ -353,6 +356,8 @@ export function App() {
 
         {page === "stream-demo" && activeProject && <StreamDemoPage key={activeProject.id} project={activeProject} />}
         {page === "settings" && <SettingsPage t={t} models={models} activeProject={activeProject} context={workflowContext} />}
+        {activeProject && <AssignmentFooter page={page} onDeleted={async () => { await refresh(); await refreshProjectArtifacts(); }} />}
+        </WorkflowProvider>
       </main>
       <TaskCenter jobs={jobs} clientTasks={clientTasks} activeProjectId={activeProject?.id} onJobsChange={setJobs} />
     </div>
@@ -730,6 +735,8 @@ function ProjectsPage({ projects, refresh, t, activeProjectId, setActiveProjectI
   const [context, setContext] = useState<ProjectArtifactContext | null>(null);
   const [storageStatuses, setStorageStatuses] = useState<Record<string, ProjectStorageStatus>>({});
   const [cleaningProjectId, setCleaningProjectId] = useState("");
+  const [deletingProjectId, setDeletingProjectId] = useState("");
+  const [projectError, setProjectError] = useState("");
   const active = projects.find((project) => project.id === activeProjectId) ?? projects[0];
   const projectJobs = jobs.filter((job) => !active?.id || job.project_id === active.id);
   useEffect(() => {
@@ -765,7 +772,14 @@ function ProjectsPage({ projects, refresh, t, activeProjectId, setActiveProjectI
     timer = window.setInterval(() => {
       loadStorageStatuses().catch(console.error);
     }, 5000);
-    return () => {
+    async function deletePackage(project: Project) {
+    if (!window.confirm(`Delete project package ${project.name}? This removes its project workspace, labels, YAML, models, exports, and DB rows. Raw data/input is kept.`)) return;
+    setDeletingProjectId(project.id); setProjectError("");
+    try { await api.deleteProject(project.id); await refresh(); }
+    catch (cause) { setProjectError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setDeletingProjectId(""); }
+  }
+  return () => {
       cancelled = true;
       if (timer !== undefined) window.clearInterval(timer);
     };
@@ -802,15 +816,16 @@ function ProjectsPage({ projects, refresh, t, activeProjectId, setActiveProjectI
       </form>
       <div className="list-panel">
         <h2>Assign / switch project</h2>
+        {projectError && <p className="review-error" role="alert">{projectError}</p>}
         {projects.map((project) => (
-          <article key={project.id} className={`row-card ${active?.id === project.id ? "is-selected" : ""} ${storageStatuses[project.id]?.is_stale ? "is-stale" : ""}`}>
+          <article key={project.id} className={`row-card project-card ${active?.id === project.id ? "is-assigned" : ""} ${storageStatuses[project.id]?.is_stale ? "is-stale" : ""}`}>
             <strong>{project.name}</strong>
             <span>{project.description || "No description"}</span>
             <span>{project.root_path}</span>
             <ProjectStorageStatusCard status={storageStatuses[project.id]} cleaning={cleaningProjectId === project.id} onCleanup={() => cleanupStaleProject(project)} />
             <div className="inline-actions">
-              <button className="secondary action-assign" type="button" onClick={() => setActiveProjectId(project.id)}>Assign active</button>
-              <button className="secondary danger action-delete" type="button" onClick={async () => { if (window.confirm(`Delete project package ${project.name}? This removes its project workspace, labels, YAML, models, exports, and DB rows. Raw data/input is kept.`)) { await api.deleteProject(project.id); await refresh(); } }}><Trash2 size={16} />Delete project package</button>
+              <button className="secondary action-assign" type="button" aria-pressed={active?.id === project.id} onClick={() => setActiveProjectId(project.id)}>{active?.id === project.id ? "Assigned" : "Assign active"}</button>
+              <button className="secondary danger action-delete" type="button" disabled={Boolean(deletingProjectId) || jobs.some(job => job.project_id === project.id && ["queued", "running", "cancel_requested"].includes(job.status))} onClick={() => void deletePackage(project)}><Trash2 size={16} />{deletingProjectId === project.id ? "Deleting…" : "Delete project package"}</button>
             </div>
           </article>
         ))}
@@ -1638,7 +1653,7 @@ function PseudoPage({ project, models, jobs, refreshJobs, t }: { project: Projec
         ))}
       </div>
       <button type="button" className="secondary add-class-action action-add" onClick={() => { markSchemaDirty(); setClasses((current) => [...current, { class_id: current.length, class_name: "new_class", descriptors: ["new object"] }]); }}>+ class</button>
-      <details className="history-panel">
+      <details className="history-panel" open>
         <summary>Previous pseudo-label runs <HelpTooltip text="These are prior Generate runs. They record which schema/settings produced labels, but selecting schemas is controlled by the History dropdown above." /></summary>
         {runs.map((run) => <div className="row-card history-row" key={run.id}><div><strong>{pseudoRunLabel(run)}</strong><span>{run.created_at} · conf={String(run.confidence)} iou={String(run.iou)} · images={String(run.labeled_count)}/{String(run.image_count)} · merge={((Number(run.merge_rate) || 0) * 100).toFixed(1)}%</span></div><HistoryDeleteButton projectId={project.id} artifactType="pseudo" artifactId={run.id} label={pseudoBuildName(run)} onDeleted={async () => { await loadHistory(); await refreshJobs(); }} /></div>)}
       </details>
@@ -1820,6 +1835,7 @@ export function AugmentationEffectModal({ draft, previewSamples, loading, error,
 }
 
 function AugmentationPage({ project, jobs, refreshJobs, artifactRevision }: { project: Project; jobs: Job[]; refreshJobs: () => Promise<void>; artifactRevision: number }) {
+  const runtime = useWorkflow();
   const augmentationJob = findWorkflowJob(jobs, "augmentation");
   const initialDraft = useMemo(() => loadAugmentationDraft(project.id), [project.id]);
   const [name, setName] = useState(initialDraft.name);
@@ -1844,7 +1860,8 @@ function AugmentationPage({ project, jobs, refreshJobs, artifactRevision }: { pr
       setPseudoRuns(nextPseudoRuns);
       setAugmentationRuns(nextAugmentationRuns);
       setName((current) => /^Augment_\d+_v\d+$/i.test(current) ? versionedBuildName("Augment", nextAugmentationRuns.map((run) => run.name || "")) : current);
-      if (!selectedPseudoRunId && nextPseudoRuns[0]?.id) setSelectedPseudoRunId(nextPseudoRuns[0].id);
+      if (runtime) setSelectedPseudoRunId(runtime.state?.assignments.pseudo ?? "");
+      else if (!selectedPseudoRunId && nextPseudoRuns[0]?.id) setSelectedPseudoRunId(nextPseudoRuns[0].id);
       const nextId = nextSelectedId || chooseLatestBuildSelection(selectedBuildId, nextAugmentationRuns, false);
       setSelectedBuildId(nextId);
       return { runs: nextAugmentationRuns, selectedId: nextId };
@@ -1901,6 +1918,10 @@ function AugmentationPage({ project, jobs, refreshJobs, artifactRevision }: { pr
     };
   }, [project.id, editingEffect, settings.copies]);
 
+  useEffect(() => {
+    if (runtime?.state) setSelectedPseudoRunId(runtime.state.assignments.pseudo ?? "");
+  }, [runtime?.state?.assignments.pseudo, Boolean(runtime?.state)]);
+
   function applyEditingEffect() {
     if (!editingEffect) return;
     setSettings((current) => {
@@ -1947,14 +1968,14 @@ function AugmentationPage({ project, jobs, refreshJobs, artifactRevision }: { pr
     >
       <h2>Image augmentation</h2>
       <p className="muted">Optional step before Split. Build an augmentation stack with + parameters, configure each in a sampled-photo dialog, then create generated images.</p>
-      <label><span>Pseudo-label build input</span><select value={selectedPseudoRunId} onChange={(event) => setSelectedPseudoRunId(event.target.value)}><option value="">All currently labeled images</option>{pseudoRuns.map((run) => <option key={run.id} value={run.id}>{pseudoRunLabel(run)}</option>)}</select></label>
+      <label><span>Pseudo-label build input</span><select value={selectedPseudoRunId} onChange={(event) => { setSelectedPseudoRunId(event.target.value); if (runtime) void runtime.change(() => api.assignWorkflow(project.id, "pseudo", event.target.value || null)); }}><option value="">All currently labeled images</option>{pseudoRuns.map((run) => <option key={run.id} value={run.id}>{pseudoRunLabel(run)}</option>)}</select></label>
       <label><span>Augmentation run name</span><input name="name" value={name} onChange={(event) => setName(event.target.value)} /></label>
       <AugmentationControlPanel settings={settings} onChange={setSettings} onEditEffect={(effect) => { setPreviewError(""); setModalPreviewSamples([]); setEditingEffect(effect); }} />
       {!hasEffects && !settings.skip && <p className="inline-feedback">Add at least one augmentation parameter or choose Skip augment to create a source build.</p>}
       <AugmentationBuildSummary run={selectedBuild} pseudoRuns={pseudoRuns} />
       {loadingBuilds ? <p className="inline-feedback"><LoaderCircle className="spin" size={15} /> Refreshing build versions…</p> : null}
       {augmentationRuns.length ? <div className="field-row"><label><span>Inspect build</span><select value={selectedBuildId} disabled={loadingBuilds} onChange={(event) => { setSelectedBuildId(event.target.value); setCreatedSamples([]); }}><option value="">Select augment/source build</option>{augmentationRuns.map((run) => <option key={run.id} value={run.id}>{augmentationRunLabel(run, pseudoRuns)}</option>)}</select></label><label className="check-row"><input type="checkbox" checked={showCreatedBoxes} onChange={(event) => setShowCreatedBoxes(event.target.checked)} />Show bounding boxes</label><button type="button" className="secondary action-browse" disabled={loadingBuilds} onClick={() => loadCreatedPreview().catch(console.error)}><Dice5 size={16} />Random sample</button></div> : null}
-      {augmentationRuns.length ? <details className="history-panel"><summary>Augment history</summary><div className="version-list">{augmentationRuns.map((run) => <article className="history-row" key={run.id}><div><strong>{augmentationRunLabel(run, pseudoRuns)}</strong><span>{Number(run.created_image_count ?? 0).toLocaleString()} generated images</span></div><HistoryDeleteButton projectId={project.id} artifactType="augmentation" artifactId={run.id} label={augmentationBuildName(run)} onDeleted={async () => { setCreatedSamples([]); await loadAugmentationRuns(); await refreshJobs(); }} /></article>)}</div></details> : null}
+      {augmentationRuns.length ? <details className="history-panel" open><summary>Augment history</summary><div className="version-list">{augmentationRuns.map((run) => <article className="history-row" key={run.id}><div><strong>{augmentationRunLabel(run, pseudoRuns)}</strong><span>{Number(run.created_image_count ?? 0).toLocaleString()} generated images</span></div><HistoryDeleteButton projectId={project.id} artifactType="augmentation" artifactId={run.id} label={augmentationBuildName(run)} onDeleted={async () => { setCreatedSamples([]); await loadAugmentationRuns(); await refreshJobs(); }} /></article>)}</div></details> : null}
       {createdSamples.length ? <section className="augmentation-preview created-augmentation-preview"><h3>Random generated output check</h3><p className="muted">After Create augmented images, inspect random generated images to make sure transformed labels still align.</p><div className="split-sample-grid">{createdSamples.map((sample) => <AugmentationPreviewCard key={`created-${sample.image_id}`} sample={sample} showBoxes={showCreatedBoxes} />)}</div></section> : null}
       {augmentationJob && <div className="job-progress-inline" title={augmentationJob.message}><span>{augmentationJob.name}: {augmentationJob.status}</span><progress value={augmentationJob.progress} max={100} /><small>{augmentationJob.progress}% · {augmentationJob.message}</small></div>}
       <ProcessingButton busy={submitting || isActiveJob(augmentationJob)} jobId={isActiveJob(augmentationJob) ? augmentationJob?.id : undefined} disabled={!hasEffects && !settings.skip} progress={augmentationJob ? augmentationJob.progress : submitting ? 12 : undefined} statusText={augmentationJob ? augmentationJob.message || `${augmentationJob.name}: ${augmentationJob.status}` : "Submitting augmentation run…"} className="primary action-process"><Play size={17} />Create augmented images</ProcessingButton>
@@ -1989,6 +2010,7 @@ export function AugmentationPreviewCard({ sample, showBoxes = true }: { sample: 
 }
 
 export function SplitPage({ project, jobs, refreshJobs, t, artifactRevision }: { project: Project; jobs: Job[]; refreshJobs: () => Promise<void>; t: (key: string) => string; artifactRevision: number }) {
+  const runtime = useWorkflow();
   const [runs, setRuns] = useState<PseudoLabelRun[]>([]);
   const [augmentationRuns, setAugmentationRuns] = useState<AugmentationRun[]>([]);
   const [openDataImports, setOpenDataImports] = useState<OpenDataImport[]>([]);
@@ -2034,10 +2056,10 @@ export function SplitPage({ project, jobs, refreshJobs, t, artifactRevision }: {
       setAugmentationRuns(nextAugmentationRuns as AugmentationRun[]);
       setSplits(nextSplits);
       setOpenDataImports(nextOpenDataImports);
-      setSelectedOpenDataImportId((current) => current && nextOpenDataImports.some((item) => item.id === current) ? current : nextOpenDataImports.find((item) => item.status === "active")?.id ?? "");
-      setSelectedRunId((current) => chooseLatestBuildSelection(current, nextRuns, false));
+      setSelectedOpenDataImportId((current) => runtime ? runtime.state?.assignments.open_data ?? "" : current && nextOpenDataImports.some((item) => item.id === current) ? current : nextOpenDataImports.find((item) => item.status === "active")?.id ?? "");
+      setSelectedRunId((current) => runtime ? runtime.state?.assignments.pseudo ?? "" : chooseLatestBuildSelection(current, nextRuns, false));
       const currentAugmentationRuns = nextAugmentationRuns.filter((run) => !run.outdated);
-      setSelectedAugmentationRunId((current) => chooseLatestBuildSelection(current, currentAugmentationRuns, preferLatestAugment));
+      setSelectedAugmentationRunId((current) => runtime ? runtime.state?.assignments.augmentation ?? "" : chooseLatestBuildSelection(current, currentAugmentationRuns, preferLatestAugment));
       const nextSplitId = String((nextSplits.find((split) => split.is_current !== false) ?? nextSplits[0])?.id ?? "");
       setSelectedSplitId(nextSplitId);
       if (nextSplitId) {
@@ -2065,13 +2087,20 @@ export function SplitPage({ project, jobs, refreshJobs, t, artifactRevision }: {
     api.datasetSplitSamples(project.id, selectedSplitId, sampleLimit, sampleSeed).then(setSamples).catch(console.error).finally(() => setLoadingSamples(false));
   }, [project.id, selectedSplitId, sampleLimit, sampleSeed]);
 
+  useEffect(() => {
+    if (!runtime?.state) return;
+    setSelectedRunId(runtime.state.assignments.pseudo ?? "");
+    setSelectedAugmentationRunId(runtime.state.assignments.augmentation ?? "");
+    setSelectedOpenDataImportId(runtime.state.assignments.open_data ?? "");
+  }, [runtime?.state?.assignments.pseudo, runtime?.state?.assignments.augmentation, runtime?.state?.assignments.open_data, Boolean(runtime?.state)]);
   const selectedRun = runs.find((run) => run.id === selectedRunId);
   const selectedAugmentationRun = augmentationRuns.find((run) => run.id === selectedAugmentationRunId);
   const selectedOpenDataImport = openDataImports.find((item) => item.id === selectedOpenDataImportId) ?? null;
   const selectedSplit = splits.find((split) => String(split.id) === selectedSplitId);
-  const canSubmitSplit = ratiosValid && !selectedAugmentationRun?.outdated;
+  const canSubmitSplit = ratiosValid && !selectedAugmentationRun?.outdated && (!runtime || Boolean(runtime.state?.composition_id));
   return (
     <section className="panel-grid">
+      <CompositionBoard />
       <form
         className="panel wide"
         onSubmit={async (event) => {
@@ -2086,6 +2115,7 @@ export function SplitPage({ project, jobs, refreshJobs, t, artifactRevision }: {
             if (!ratiosValid) throw new Error("Train + validation must be <= 1.0 so test can fill the remainder.");
             await api.split(project.id, {
               // Keep prior materialized splits immutable for an already-running training job.
+              ...(runtime?.state?.composition_id ? { composition_id: runtime.state.composition_id } : {}),
               name: versionedBuildName("Split", splits.map((split) => String(split.name ?? ""))),
               train_ratio: trainRatioNumber,
               val_ratio: valRatioNumber,
@@ -2106,15 +2136,18 @@ export function SplitPage({ project, jobs, refreshJobs, t, artifactRevision }: {
         <h2>Build New Split Version</h2>
         <p className="muted">Creates an immutable dataset version from the selected Pseudo, Augment, and optional Open Data versions.</p>
         {loadingBuilds ? <p className="inline-feedback"><LoaderCircle className="spin" size={15} /> Syncing latest upstream builds…</p> : null}
+        {!runtime && <>
         <label><span>Pseudo version</span><select value={selectedRunId} disabled={loadingBuilds} onChange={(event) => setSelectedRunId(event.target.value)}><option value="">[Pseudo · All project labels]</option>{runs.map((run) => <option key={run.id} value={run.id}>[Pseudo · {pseudoBuildName(run)} · {Number(run.labeled_count ?? 0).toLocaleString()} labeled] · {String(run.created_at ?? "").replace("T", " ").slice(0, 19)}</option>)}</select></label>
         {selectedRun && <p className="muted">Using conf={String(selectedRun.confidence)}, iou={String(selectedRun.iou)}, merge rate={((Number(selectedRun.merge_rate) || 0) * 100).toFixed(1)}%.</p>}
         <label><span>Augment version</span><select value={selectedAugmentationRunId} disabled={loadingBuilds} onChange={(event) => { setSelectedAugmentationRunId(event.target.value); setSubmitError(""); }}><option value="">[Augment · None · use matching labeled images]</option>{augmentationRuns.map((run) => <option key={run.id} value={run.id} disabled={Boolean(run.outdated)}>[Augment · {augmentationBuildName(run)} · {Number(run.created_image_count ?? 0).toLocaleString()} images]{run.outdated ? " · Outdated — rebuild required" : ""}</option>)}</select></label>
         <AugmentationBuildSummary run={selectedAugmentationRun} pseudoRuns={runs} />
         <label><span>Open Data version</span><select value={selectedOpenDataImportId} disabled={loadingBuilds} onChange={(event) => setSelectedOpenDataImportId(event.target.value)}><option value="">[Open Data · None]</option>{openDataImports.map((item) => <option key={item.id} value={item.id}>[Open Data · {openDataVersionName(item)} · {item.selected_image_count.toLocaleString()} images]{item.status === "active" ? " · Active in Review" : " · Saved"}</option>)}</select></label>
+        </>}
         <section className="lineage-preview" aria-label="New split source recipe">
           <div><strong>New Split recipe</strong><span>Only the explicitly selected Open Data version is included.</span></div>
           <DatasetLineageChain pseudoRun={selectedRun} augmentationRun={selectedAugmentationRun} openDataImport={selectedOpenDataImport} />
         </section>
+        {runtime && <p className="inline-feedback">{runtime.state?.composition_id ? `Assigned composition: ${runtime.state.compositions.find(item => item.id === runtime.state?.composition_id)?.name}` : "Save & assign a composition above before building a Split."}</p>}
         {submitError ? <p className="review-error" role="alert">{submitError}</p> : null}
         <div className="ratio-builder" aria-label="Train validation test split ratios">
           <div className="ratio-presets" aria-label="Split ratio presets">
@@ -2145,7 +2178,7 @@ export function SplitPage({ project, jobs, refreshJobs, t, artifactRevision }: {
         {selectedSplit && <><DatasetLineageChain split={selectedSplit} pseudoRun={runs.find((run) => run.id === selectedSplit.pseudo_label_run_id)} augmentationRun={augmentationRuns.find((run) => run.id === selectedSplit.augmentation_run_id)} openDataImport={openDataImports} /><p className="muted">train/val/test={String(selectedSplit.train_ratio)}/{String(selectedSplit.val_ratio)}/{String(selectedSplit.test_ratio)} · {String(selectedSplit.dataset_yaml_path)}</p></>}
         {loadingSamples ? <p className="inline-feedback"><LoaderCircle className="spin" size={15} /> Rendering split sample boxes…</p> : null}
         <SplitSamplePreview samples={samples} />
-        <details><summary>Split history / lineage</summary>{splits.map((split) => <article key={String(split.id)} className={`row-card history-row ${split.outdated ? "is-outdated" : ""}`}><div><strong>{split.is_current !== false ? "Current Split" : "Saved Split version"}</strong><DatasetLineageChain split={split} pseudoRun={runs.find((run) => run.id === split.pseudo_label_run_id)} augmentationRun={augmentationRuns.find((run) => run.id === split.augmentation_run_id)} openDataImport={openDataImports} /><span>{String(split.dataset_yaml_path)} · train/val/test={String(split.train_ratio)}/{String(split.val_ratio)}/{String(split.test_ratio)}</span><OutdatedArtifactNotice outdated={Boolean(split.outdated)} reason={typeof split.outdated_reason === "string" ? split.outdated_reason : null} rebuild="Build a new Split version before training." /></div><HistoryDeleteButton projectId={project.id} artifactType="split" artifactId={String(split.id)} label={splitDisplayName(split)} onDeleted={async () => { setSamples({ train: [], valid: [], test: [] }); await loadBuildInputs(false); await refreshJobs(); }} /></article>)}</details>
+        <details open><summary>Split history / lineage</summary>{splits.map((split) => <article key={String(split.id)} className={`row-card history-row ${split.outdated ? "is-outdated" : ""}`}><div><strong>{split.is_current !== false ? "Current Split" : "Saved Split version"}</strong><DatasetLineageChain split={split} pseudoRun={runs.find((run) => run.id === split.pseudo_label_run_id)} augmentationRun={augmentationRuns.find((run) => run.id === split.augmentation_run_id)} openDataImport={openDataImports} /><span>{String(split.dataset_yaml_path)} · train/val/test={String(split.train_ratio)}/{String(split.val_ratio)}/{String(split.test_ratio)}</span><OutdatedArtifactNotice outdated={Boolean(split.outdated)} reason={typeof split.outdated_reason === "string" ? split.outdated_reason : null} rebuild="Build a new Split version before training." /></div><HistoryDeleteButton projectId={project.id} artifactType="split" artifactId={String(split.id)} label={splitDisplayName(split)} onDeleted={async () => { setSamples({ train: [], valid: [], test: [] }); await loadBuildInputs(false); await refreshJobs(); }} /></article>)}</details>
       </div>
     </section>
   );
@@ -2311,6 +2344,7 @@ export function TrainingRunSummary({ run }: { run?: TrainingRun | null }) {
 }
 
 export function TrainPage({ project, models, jobs, refreshJobs, t, artifactRevision, onGoToSplit }: { project: Project; models: ModelLists; jobs: Job[]; refreshJobs: () => Promise<void>; t: (key: string) => string; artifactRevision: number; onGoToSplit?: () => void }) {
+  const runtime = useWorkflow();
   const [splits, setSplits] = useState<DatasetSplitRun[]>([]);
   const [pseudoRuns, setPseudoRuns] = useState<PseudoLabelRun[]>([]);
   const [augmentationRuns, setAugmentationRuns] = useState<AugmentationRun[]>([]);
@@ -2334,7 +2368,7 @@ export function TrainPage({ project, models, jobs, refreshJobs, t, artifactRevis
       setTrainingRuns(nextTrainingRuns);
       setOpenDataImports(nextOpenDataImports);
       const usableSplits = items.filter((split) => !split.outdated);
-      setSplitId((current) => (
+      setSplitId((current) => runtime ? runtime.state?.assignments.split ?? "" : (
         current && usableSplits.some((split) => split.id === current)
           ? current
           : usableSplits.find((split) => split.is_current !== false)?.id ?? usableSplits[0]?.id ?? ""
@@ -2368,6 +2402,9 @@ export function TrainPage({ project, models, jobs, refreshJobs, t, artifactRevis
       console.error(error);
     });
   }, [artifactRevision]);
+  useEffect(() => {
+    if (runtime?.state) setSplitId(runtime.state.assignments.split ?? "");
+  }, [runtime?.state?.assignments.split, Boolean(runtime?.state)]);
   const selectedSplit = splits.find((split) => String(split.id) === splitId);
   const canSubmitTraining = Boolean(selectedSplit && !selectedSplit.outdated);
   const selectedOrLatestRun = trainingRuns.find((run) => run.job_id === trainingJob?.id) ?? trainingRuns[0] ?? null;
@@ -2413,7 +2450,7 @@ export function TrainPage({ project, models, jobs, refreshJobs, t, artifactRevis
       <p className="muted">Choose the exact Split version to train. Versions marked outdated stay visible in Split history but cannot be trained.</p>
       <label title="Training build name shown later in Validate and Model Convert selectors."><span>Training run name</span><input value={runName} onChange={(event) => setRunName(event.target.value)} /></label>
       {loadingInputs ? <p className="inline-feedback"><LoaderCircle className="spin" size={15} /> Syncing latest split/model inputs…</p> : null}
-      <label><span>Split version</span><select value={splitId} disabled={loadingInputs} onChange={(event) => setSplitId(event.target.value)}><option value="">No usable Split version</option>{splits.filter((split) => !split.outdated).map((split) => <option key={split.id} value={split.id}>{datasetSplitOptionLabel(split, pseudoRuns, augmentationRuns, openDataImports)}{split.is_current !== false ? " · Current" : " · Saved"}</option>)}</select></label>
+      <label><span>Split version</span><select value={splitId} disabled={loadingInputs} onChange={(event) => { setSplitId(event.target.value); if (runtime) void runtime.change(() => api.assignWorkflow(project.id, "split", event.target.value || null)); }}><option value="">No usable Split version</option>{splits.filter((split) => !split.outdated).map((split) => <option key={split.id} value={split.id}>{datasetSplitOptionLabel(split, pseudoRuns, augmentationRuns, openDataImports)}{split.is_current !== false ? " · Current" : " · Saved"}</option>)}</select></label>
       {!canSubmitTraining ? <div className="outdated-training-block"><span>Project data changed or no usable Split version exists. Build a new Split version before training.</span>{onGoToSplit ? <button type="button" className="secondary" onClick={onGoToSplit}>Go to Split</button> : null}</div> : null}
       {submitError ? <p className="review-error" role="alert">{submitError}</p> : null}
       <TrainingInputSummary split={selectedSplit} pseudoRuns={pseudoRuns} augmentationRuns={augmentationRuns} openDataImport={openDataImports} />
@@ -2464,6 +2501,7 @@ export function ValidationRandomButton({ loading, sampleCount = 1, onSampleCount
 }
 
 function ValidationPage({ project, models, artifactRevision }: { project: Project; models: ModelLists; artifactRevision: number }) {
+  const runtime = useWorkflow();
   const [schemas, setSchemas] = useState<ClassSchema[]>([]);
   const [modelSources, setModelSources] = useState<ModelSource[]>([]);
   const [schemaId, setSchemaId] = useState("");
@@ -2489,6 +2527,11 @@ function ValidationPage({ project, models, artifactRevision }: { project: Projec
   useEffect(() => { loadModelSources(false).catch(console.error); }, [project.id]);
   useEffect(() => { if (artifactRevision) loadModelSources(true).catch(console.error); }, [artifactRevision]);
   useEffect(() => { if (!modelName) setModelName(modelSources[0]?.path ?? models.output_models[0] ?? models.input_models[0] ?? "yolov8n.pt"); }, [modelName, modelSources, models.output_models, models.input_models]);
+  useEffect(() => {
+    const assignedId = runtime?.state?.assignments.training;
+    const source = modelSources.find(item => item.training_run_id === assignedId);
+    if (assignedId && source) setModelName(source.path);
+  }, [runtime?.state?.assignments.training, modelSources]);
   async function runRandomInference() {
     setError("");
     if (!folderPath.trim()) {
@@ -2648,6 +2691,7 @@ export function ModelSourceSelector({ sources, value, onChange }: { sources: Mod
 }
 
 export function ModelConvertPage({ project, jobs, refreshJobs }: { project: Project; jobs: Job[]; refreshJobs: () => Promise<void> }) {
+  const runtime = useWorkflow();
   const [modelSources, setModelSources] = useState<ModelSource[]>([]);
   const [schemas, setSchemas] = useState<ClassSchema[]>([]);
   const [conversions, setConversions] = useState<ModelConversionRun[]>([]);
@@ -2669,6 +2713,11 @@ export function ModelConvertPage({ project, jobs, refreshJobs }: { project: Proj
   const unavailableReason = capabilities.find((capability) => !capability.available)?.reason ?? capabilityError;
   const conversionUnavailable = capabilitiesLoading || Boolean(unavailableReason);
 
+  useEffect(() => {
+    const assignedId = runtime?.state?.assignments.training;
+    const source = modelSources.find(item => item.training_run_id === assignedId);
+    if (assignedId && source) setModelSourceId(source.id);
+  }, [runtime?.state?.assignments.training, modelSources]);
   async function loadConvertData() {
     setCapabilitiesLoading(true);
     setCapabilityError("");

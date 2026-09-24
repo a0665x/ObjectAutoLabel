@@ -1422,6 +1422,24 @@ class Repository:
     def get_pseudo_label_run(self, run_id: str) -> dict[str, Any] | None:
         return row_to_dict(self.db.execute("select * from pseudo_label_runs where id = ?", (run_id,)).fetchone())
 
+    def snapshot_pseudo_images(self, run_id: str, image_ids: list[str]) -> None:
+        with transaction(self.db):
+            for image_id in image_ids:
+                self.db.execute(
+                    "insert into pseudo_image_snapshots (run_id, image_id, annotations_json) values (?, ?, ?) on conflict(run_id, image_id) do update set annotations_json = excluded.annotations_json",
+                    (run_id, image_id, json.dumps(self.list_annotations(image_id))),
+                )
+
+    def pseudo_build_images(self, project_id: str, run_id: str) -> list[dict[str, Any]]:
+        rows = self.db.execute(
+            "select images.*, snap.annotations_json as snapshot_annotations from pseudo_image_snapshots snap join images on images.id = snap.image_id where snap.run_id = ? and images.project_id = ? and images.removed_at is null and images.augmentation_run_id is null and images.source_origin != 'open_data'",
+            (run_id, project_id),
+        ).fetchall()
+        snapshots = [dict(row) for row in rows]
+        known = {row['id'] for row in snapshots}
+        snapshots.extend(image for image in self.list_images(project_id, limit=100000, offset=0) if image['id'] not in known and image.get('pseudo_label_run_id') == run_id and not image.get('augmentation_run_id') and image.get('source_origin') != 'open_data')
+        return snapshots
+
     def assign_pseudo_label_run_to_images(self, run_id: str, image_ids: list[str]) -> None:
         if not image_ids:
             return
@@ -1430,6 +1448,7 @@ class Repository:
                 "update images set pseudo_label_run_id = ? where id = ?",
                 [(run_id, image_id) for image_id in image_ids],
             )
+            self.snapshot_pseudo_images(run_id, image_ids)
 
     def create_augmentation_run_record(
         self,

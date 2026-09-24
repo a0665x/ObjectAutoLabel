@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import model_lineage, open_data, project_services, world_models
+from . import workflow, model_lineage, open_data, project_services, world_models
 from .auth import AuthService, AuthSettings
 from .conversion_runtime import ConversionCapability, detect_conversion_capabilities
 from .world_model_catalog import PROMPT_ENCODER_FILENAMES, describe_world_model, list_world_model_details
@@ -143,6 +143,7 @@ async def app_lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="ObjectAutoLabel API", version="0.2.0", lifespan=app_lifespan)
+app.include_router(workflow.create_workflow_router(lambda: repo))
 app.include_router(create_stream_router(lambda: repo, lambda: auth.settings.enabled, ALLOWED_CORS_ORIGINS))
 app.include_router(create_cli_router(paths.project_root / "cli_workspace", lambda: auth.settings.enabled, ALLOWED_CORS_ORIGINS))
 
@@ -363,6 +364,8 @@ def create_project(payload: ProjectCreate) -> dict[str, Any]:
 
 @app.delete("/api/projects/{project_id}")
 def delete_project(project_id: str) -> dict[str, bool]:
+    if repo.db.execute("select 1 from jobs where project_id = ? and status in ('queued', 'running', 'cancel_requested') limit 1", (project_id,)).fetchone():
+        raise HTTPException(status_code=409, detail="Stop active project jobs before deleting this project package")
     if not repo.delete_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
     return {"ok": True}
@@ -822,6 +825,14 @@ def create_dataset_split(project_id: str, payload: DatasetSplitCreate) -> dict[s
     if not repo.get_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
     try:
+        if payload.composition_id:
+            state = workflow.read_state(repo, project_id)
+            composition = next((c for c in state['compositions'] if c['id'] == payload.composition_id), None)
+            if composition is None:
+                raise FileNotFoundError("Composition not found")
+            recipe = workflow.validate_recipe(repo, project_id, composition)
+            for field, value in recipe.items():
+                setattr(payload, field, value)
         project_services.validate_dataset_split_augmentation(
             repo,
             project_id,
@@ -845,6 +856,7 @@ def create_dataset_split(project_id: str, payload: DatasetSplitCreate) -> dict[s
         payload.open_data_import_id,
         project_id=project_id,
         related_type="dataset_split",
+        composition_id=payload.composition_id,
     )
 
 

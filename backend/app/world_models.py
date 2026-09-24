@@ -160,11 +160,15 @@ def run_yolo_world_pseudo_label(
     if not prompts:
         raise ValueError("Class schema must include at least one class name or descriptor")
 
-    images = repo.list_images(project_id, limit=100000, offset=0)
+    images = [image for image in repo.list_images(project_id, limit=100000, offset=0) if image.get("source_origin") != "open_data" and not image.get("augmentation_run_id")]
     if source_asset_id:
         images = [image for image in images if image["source_asset_id"] == source_asset_id]
 
-    output_dir = Path(project["root_path"]) / "pseudo_labels" / Path(world_model).stem
+    # Freeze the previously assigned labels before inference replaces live annotations.
+    for image in images:
+        if image.get("pseudo_label_run_id") and not repo.db.execute("select 1 from pseudo_image_snapshots where run_id = ? and image_id = ?", (image["pseudo_label_run_id"], image["id"])).fetchone():
+            repo.snapshot_pseudo_images(image["pseudo_label_run_id"], [image["id"]])
+    output_dir = Path(project["root_path"]) / "pseudo_labels" / f"{Path(world_model).stem}_{job_id}"
     output_dir.mkdir(parents=True, exist_ok=True)
     model_info = describe_world_model(model_path.name)
     try:

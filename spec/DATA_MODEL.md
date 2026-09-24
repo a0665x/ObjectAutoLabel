@@ -145,3 +145,9 @@ Deletion follows stored lineage from upstream to downstream:
 `Open Data import → Split → Training → Conversion → Export`
 
 The selected record and every dependent downstream record are removed in one database transaction. Associated completed jobs are removed, Current Split falls back to the newest remaining Split, and generated Augment or imported Open Data image rows are deleted with their annotations. The Open Data import's shared `project_dir` download cache is retained. Filesystem cleanup is restricted to unshared child directories beneath project-owned `pseudo_labels/`, `augmentations/`, `splits/`, and `output_model/{runs,conversions,exports}/`. Training cleanup removes the run-specific Ultralytics `save_dir`, never the shared `output_model/runs` parent. A path still referenced by another record is retained.
+
+## Shared workflow assignments
+
+Project assignments, saved dataset combinations, draggable Split recipes and
+Pseudo annotation snapshots are described in
+[Workflow assignments and compositions](references/workflow-assignments-and-compositions.md).

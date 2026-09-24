@@ -84,3 +84,10 @@ a host camera or uploaded video, and an annotated GStreamer video stream.
 A shared Python utility workspace and trusted-operator terminal sheets using
 the same Docker runtime as Stream Demo.
 _Avoid_: Sandbox, host Python environment
+
+**Workflow assignment**:
+A project-persisted choice of saved output for downstream workflow pages.
+
+**Dataset composition**:
+A named reusable selection of a Pseudo source, its optional Augment build,
+and an optional Open Data version, used to create a Split build.

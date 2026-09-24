@@ -772,14 +772,7 @@ function ProjectsPage({ projects, refresh, t, activeProjectId, setActiveProjectI
     timer = window.setInterval(() => {
       loadStorageStatuses().catch(console.error);
     }, 5000);
-    async function deletePackage(project: Project) {
-    if (!window.confirm(`Delete project package ${project.name}? This removes its project workspace, labels, YAML, models, exports, and DB rows. Raw data/input is kept.`)) return;
-    setDeletingProjectId(project.id); setProjectError("");
-    try { await api.deleteProject(project.id); await refresh(); }
-    catch (cause) { setProjectError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setDeletingProjectId(""); }
-  }
-  return () => {
+    return () => {
       cancelled = true;
       if (timer !== undefined) window.clearInterval(timer);
     };
@@ -794,6 +787,13 @@ function ProjectsPage({ projects, refresh, t, activeProjectId, setActiveProjectI
     } finally {
       setCleaningProjectId("");
     }
+  }
+  async function deletePackage(project: Project) {
+    if (!window.confirm(`Delete project package ${project.name}? This removes its project workspace, labels, YAML, models, exports, and DB rows. Raw data/input is kept.`)) return;
+    setDeletingProjectId(project.id); setProjectError("");
+    try { await api.deleteProject(project.id); await refresh(); }
+    catch (cause) { setProjectError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setDeletingProjectId(""); }
   }
   return (
     <section className="panel-grid">

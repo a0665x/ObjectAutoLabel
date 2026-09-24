@@ -761,6 +761,20 @@ describe("Training run metrics", () => {
     expect(html).toContain("Epoch 2/3");
   });
 
+  it("renders actual L1 losses without a DFL chart even for renamed checkpoints", () => {
+    const html = renderToStaticMarkup(<TrainingLossChart run={{ ...run, input_model: "renamed.pt", metrics_json: JSON.stringify([{ epoch: 1, box_loss: 1, cls_loss: 2, l1_loss: 0.3 }]) }} />);
+    expect(html).toContain("L1 loss");
+    expect(html).not.toContain("DFL loss");
+    expect(html.match(/<svg/g)).toHaveLength(3);
+  });
+
+  it("repairs old mislabeled losses only with explicit validation L1 evidence", () => {
+    const metrics = parseTrainingMetrics({ ...run, metrics_json: JSON.stringify([{ epoch: 1, dfl_loss: 0.4, "val/l1_loss": 0.5 }]) });
+    expect(metrics[0].l1_loss).toBe(0.4);
+    expect(metrics[0].dfl_loss).toBeUndefined();
+    expect(parseTrainingMetrics({ ...run, input_model: "yolo26n.pt" })[0].dfl_loss).toBe(0.4);
+  });
+
   it("shows the exact Ultralytics save_dir and model weight paths", () => {
     const html = renderToStaticMarkup(<TrainingRunSummary run={run} />);
 

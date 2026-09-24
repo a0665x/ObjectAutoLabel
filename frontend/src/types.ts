@@ -312,6 +312,7 @@ export type TrainingMetric = {
   box_loss?: number;
   cls_loss?: number;
   dfl_loss?: number;
+  l1_loss?: number;
   [key: string]: number | undefined;
 };
 
@@ -328,6 +329,7 @@ export type TrainingRun = {
   metrics_json?: string | null;
   settings_json?: string | null;
   settings?: {
+    model_contract?: { ultralytics_version: string; head: string; reg_max: number; end2end: boolean; loss_names: string[] };
     epochs?: number;
     imgsz?: number;
     batch?: number;

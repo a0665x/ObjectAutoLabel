@@ -66,7 +66,9 @@ with tempfile.TemporaryDirectory(prefix="stream-postprocess-") as directory:
                 assert mode == expected, (architecture, path, mode)
                 assert result.orig_shape == (96, 128)
             print(f"PASS {architecture} {path.suffix}: {mode}", flush=True)
-            plugin = load_detector(str(path), conf=.001, iou=.5, imgsz=64 if path.suffix == ".pt" else 320)
+            # CLI explicitly validates the requested LiteRT input size. The web
+            # predictor above separately exercises exported-size discovery.
+            plugin = load_detector(str(path), conf=.001, iou=.5, imgsz=64)
             prepared = plugin.preprocess(np.full((96, 128, 3), 100, np.uint8))
             prediction = plugin.predict(prepared)
             staged = plugin.postprocess(prediction)

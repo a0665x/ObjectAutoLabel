@@ -20,6 +20,7 @@ import yaml
 
 from .artifact_naming import versioned_artifact_name
 from .job_control import JobCancelled, raise_if_cancelled
+from .stream_verify import postprocess_mode
 from .label_io import AnnotationRow, read_yolo_labels, write_yolo_labels
 from .db import transaction
 from .repositories import Repository, new_id
@@ -1470,6 +1471,7 @@ def run_validation_previews(
                 "height": height,
                 "model_name": str(model_name),
                 "schema_name": str(schema.get("name")) if schema else "model native classes",
+                "postprocess": postprocess_mode(yolo.predictor.model) if getattr(getattr(yolo, "predictor", None), "model", None) is not None else None,
                 "annotations": annotations,
             }
         )
@@ -1502,21 +1504,47 @@ def run_validation_preview(
     )[0]
 
 
-def _training_metric_entry(epoch: int, total_epochs: int, loss_items: Any, metrics: dict[str, Any]) -> dict[str, Any]:
-    entry: dict[str, Any] = {
-        "epoch": epoch,
-        "total_epochs": total_epochs,
-    }
-    if loss_items is not None:
-        values = _training_loss_values(loss_items)
-        for key, value in zip(("box_loss", "cls_loss", "dfl_loss"), values):
-            entry[key] = value
-        for index, value in enumerate(values[3:], start=4):
-            entry[f"loss_{index}"] = value
+def _training_metric_entry(epoch: int, total_epochs: int, loss_items: Any, metrics: dict[str, Any], loss_names: Any = None) -> dict[str, Any]:
+    entry: dict[str, Any] = {"epoch": epoch, "total_epochs": total_epochs}
+    if isinstance(loss_items, Mapping):
+        # Ultralytics 8.4 returns named losses. YOLO26's third entry is L1,
+        # and dictionary order is not a schema.
+        pairs = loss_items.items()
+    else:
+        values = _training_loss_values(loss_items) if loss_items is not None else []
+        names = list(loss_names or ("box_loss", "cls_loss", "dfl_loss"))
+        names.extend(f"loss_{index + 1}" for index in range(len(names), len(values)))
+        pairs = zip(names, values)
+    for key, value in pairs:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(number):
+            entry[str(key).removeprefix("train/")] = number
     for key, value in (metrics or {}).items():
         if isinstance(value, (int, float)) and math.isfinite(float(value)):
             entry[str(key)] = float(value)
     return entry
+
+
+def _training_model_contract(yolo: Any) -> dict[str, Any] | None:
+    model = getattr(yolo, "model", None)
+    layers = getattr(model, "model", None)
+    if layers is None or not len(layers):
+        return None
+    head = layers[-1]
+    reg_max = getattr(head, "reg_max", None)
+    if not isinstance(reg_max, int):
+        return None
+    import ultralytics
+    return {
+        "ultralytics_version": getattr(ultralytics, "__version__", "unknown"),
+        "head": type(head).__name__,
+        "reg_max": reg_max,
+        "end2end": bool(getattr(model, "end2end", False)),
+        "loss_names": ["box_loss", "cls_loss", "dfl_loss" if reg_max > 1 else "l1_loss"],
+    }
 
 
 def _training_loss_values(loss_items: Any) -> list[float]:
@@ -1634,6 +1662,10 @@ def run_training(
     diagnostic_result: dict[str, Any] | None = {"enabled": True, "optimizer_steps": []} if diagnostics else None
     try:
         yolo = YOLO(str(model_path))
+        contract = _training_model_contract(yolo)
+        if contract:
+            settings = {**training_run.get("settings", {}), "model_contract": contract}
+            repo.update_training_run(training_run["id"], settings_json=json.dumps(settings, sort_keys=True))
 
         def stop_training_when_cancelled(_: Any) -> None:
             raise_if_cancelled(repo, job_id)
@@ -1744,7 +1776,7 @@ def run_training(
             epoch = min(reported_epoch, total_epochs)
             metrics = getattr(trainer, "metrics", {}) or {}
             loss_items = getattr(trainer, "loss_items", None)
-            metric_entry = _training_metric_entry(epoch, total_epochs, loss_items, metrics)
+            metric_entry = _training_metric_entry(epoch, total_epochs, loss_items, metrics, loss_names=getattr(trainer, "loss_names", None) or (contract or {}).get("loss_names"))
             loss_text = ""
             if loss_items is not None:
                 values = _training_loss_values(loss_items)

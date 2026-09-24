@@ -2235,6 +2235,15 @@ export function parseTrainingMetrics(run?: TrainingRun | null): TrainingMetric[]
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+      .map((item) => {
+        // Old callbacks assigned the third loss to DFL. Only repair histories
+        // with explicit L1 validation evidence, never a checkpoint filename.
+        if (typeof item["val/l1_loss"] === "number" && !("val/dfl_loss" in item) && !("l1_loss" in item) && "dfl_loss" in item) {
+          const { dfl_loss, ...rest } = item;
+          return { ...rest, l1_loss: dfl_loss };
+        }
+        return item;
+      })
       .map((item) => ({
         ...Object.fromEntries(Object.entries(item).filter(([, value]) => typeof value === "number")),
         epoch: Number(item.epoch)
@@ -2254,12 +2263,14 @@ export function TrainingLossChart({ run }: { run?: TrainingRun | null }) {
   const series = [
     { key: "box_loss", title: "Box loss", color: "#2563eb" },
     { key: "cls_loss", title: "Class loss", color: "#16a34a" },
-    { key: "dfl_loss", title: "DFL loss", color: "#dc2626" }
-  ];
+    { key: "dfl_loss", title: "DFL loss", color: "#dc2626" },
+    { key: "l1_loss", title: "L1 loss", color: "#9333ea" }
+  ].filter(item => metrics.some(metric => typeof metric[item.key] === "number" && Number.isFinite(metric[item.key])));
   const latest = metrics.at(-1);
   return (
     <section className="training-loss-chart">
       <div className="sidebar-header"><div><h3>Training loss</h3><p className="muted">{latest ? `Epoch ${latest.epoch}/${latest.total_epochs ?? "?"}` : "Waiting for the first epoch metric."}</p></div></div>
+      {series.some(item => item.key === "l1_loss") && <p className="muted">DFL-free regression · the model reports L1 loss.</p>}
       {metrics.length ? <div className="loss-chart-grid">{series.map((item) => <SingleLossChart key={item.key} metrics={metrics} metricKey={item.key} title={item.title} color={item.color} />)}</div> : <p className="muted">No loss points have been written yet.</p>}
     </section>
   );
@@ -2459,7 +2470,7 @@ export function TrainPage({ project, models, jobs, refreshJobs, t, artifactRevis
           <option key={model}>{model}</option>
         ))}
       </select></label>
-      <p className="muted">Local Ultralytics Detect checkpoints in input_model are architecture-driven: YOLOv8, YOLO11, YOLO12, and YOLO26 can use the same Train flow when the installed runtime supports that checkpoint. NMS-free heads are handled inside Ultralytics.</p>
+      <p className="muted">Local Ultralytics Detect checkpoints in input_model are architecture-driven: YOLOv8, YOLO11, YOLO12, and YOLO26 can use the same Train flow when the installed runtime supports that checkpoint. NMS-free heads are handled inside Ultralytics. With the pinned 8.4.130 runtime, YOLO26 uses native small-object assignment and progressive dual-head loss; its charts show Box, Class and L1. MuSGD is optional and the selected optimizer is respected.</p>
       <div className="field-row">
         <label title="Epochs: complete passes through all training images. More can improve learning but increases overfitting/time."><span>Epochs</span><input name="epochs" type="number" min="1" value={draft.epochs} onChange={(event) => setDraft((current) => ({ ...current, epochs: event.target.value }))} /></label>
         <label title="imgsz: square input resize used by YOLO, e.g. 640 means 640×640. Larger keeps details but uses more VRAM."><span>Image size</span><input name="imgsz" type="number" min="1" value={draft.imgsz} onChange={(event) => setDraft((current) => ({ ...current, imgsz: event.target.value }))} /></label>
@@ -2555,7 +2566,7 @@ function ValidationPage({ project, models, artifactRevision }: { project: Projec
 export function InferencePreviewCard({ result }: { result: ValidationPreviewResult }) {
   const width = Number(result.width) || 640;
   const height = Number(result.height) || 480;
-  return <article className="split-sample-card validation-card"><div><strong>{result.file_name}</strong><span>model: {result.model_name} · schema: {result.schema_name} · {result.annotations.length} detections</span></div><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`validation inference ${result.file_name}`}><image href={result.image_url} width={width} height={height} preserveAspectRatio="xMidYMid meet" />{result.annotations.map((annotation, index) => { const x = (annotation.x_center - annotation.width / 2) * width; const y = (annotation.y_center - annotation.height / 2) * height; const rectWidth = annotation.width * width; const rectHeight = annotation.height * height; return <g key={`${annotation.class_id}-${index}`}><rect x={x} y={y} width={rectWidth} height={rectHeight} /><text x={Math.max(0, x)} y={Math.max(12, y - 4)}>{annotation.class_name} {typeof annotation.confidence === "number" ? annotation.confidence.toFixed(2) : ""}</text></g>; })}</svg></article>;
+  return <article className="split-sample-card validation-card"><div><strong>{result.file_name}</strong><span>model: {result.model_name} · schema: {result.schema_name} · {result.annotations.length} detections</span>{result.postprocess && <span>{result.postprocess}{result.postprocess === "NMS-free" ? " · confidence filtering; no NMS IoU suppression" : ""}</span>}</div><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`validation inference ${result.file_name}`}><image href={result.image_url} width={width} height={height} preserveAspectRatio="xMidYMid meet" />{result.annotations.map((annotation, index) => { const x = (annotation.x_center - annotation.width / 2) * width; const y = (annotation.y_center - annotation.height / 2) * height; const rectWidth = annotation.width * width; const rectHeight = annotation.height * height; return <g key={`${annotation.class_id}-${index}`}><rect x={x} y={y} width={rectWidth} height={rectHeight} /><text x={Math.max(0, x)} y={Math.max(12, y - 4)}>{annotation.class_name} {typeof annotation.confidence === "number" ? annotation.confidence.toFixed(2) : ""}</text></g>; })}</svg></article>;
 }
 
 const CONVERSION_TARGETS = [

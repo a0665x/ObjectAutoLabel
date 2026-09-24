@@ -126,7 +126,7 @@ def load_detector(path: str, *, conf=.25, iou=.7, imgsz=640, device="cpu") -> De
             expected_text = " or ".join(str(item) for item in sorted(expected))
             raise ValueError(f"LiteRT input shape mismatch: expected batch-1 NHWC/NCHW {expected_text}, got {shape}; re-export the artifact with batch=1")
     predictor = DetectionPredictor(overrides={"model": str(model), "task": "detect", "device": device,
-                                              "conf": conf, "iou": iou, "imgsz": imgsz, "max_det": 100, "verbose": False})
+                                              "conf": conf, "iou": iou, "imgsz": imgsz, "max_det": 300, "verbose": False})
     predictor.setup_model(model=str(model), verbose=False)
     predictor.source_type = SourceTypes(from_img=True)
     backend = predictor.model

@@ -62,6 +62,7 @@ export type ValidationPreviewResult = {
   height?: number | null;
   model_name: string;
   schema_name: string;
+  postprocess?: string | null;
   annotations: Array<SplitSampleAnnotation & { confidence?: number | null }>;
 };
 

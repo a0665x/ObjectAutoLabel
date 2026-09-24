@@ -944,6 +944,15 @@ def test_training_metric_entry_records_mapping_loss_items() -> None:
     }
 
 
+@pytest.mark.parametrize("loss_items,loss_names", [
+    ({"l1_loss": 0.4, "cls_loss": 0.8, "box_loss": 1.0}, None),
+    ([1.0, 0.8, 0.4], ["box_loss", "cls_loss", "l1_loss"]),
+])
+def test_training_metric_entry_preserves_dfl_free_loss_names(loss_items, loss_names) -> None:
+    entry = _training_metric_entry(1, 2, loss_items, {}, loss_names=loss_names)
+    assert entry == {"epoch": 1, "total_epochs": 2, "box_loss": 1.0, "cls_loss": 0.8, "l1_loss": 0.4}
+
+
 def test_training_metric_entry_drops_nonfinite_validation_metrics() -> None:
     entry = _training_metric_entry(
         epoch=2,

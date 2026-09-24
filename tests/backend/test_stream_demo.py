@@ -152,6 +152,7 @@ def test_predict_keeps_export_dimensions_and_does_not_force_end2end():
         format="onnx", dynamic=False, imgsz=[320, 320], end2end=True, metadata={})))
     assert predict_frame(model, "frame", conf=.3, iou=.6, imgsz=640, device="cpu") == ("result", "NMS-free")
     assert calls[0]["imgsz"] == [320, 320]
+    assert calls[0]["max_det"] == 300
     assert "end2end" not in calls[0] and "nms" not in calls[0]
 
 

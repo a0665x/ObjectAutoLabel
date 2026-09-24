@@ -23,7 +23,7 @@ def predict_frame(model, frame, *, conf, iou, imgsz, device):
     # Ultralytics decodes each format and chooses NMS versus end-to-end from the
     # loaded model/metadata and output contract, not the checkpoint filename.
     result = model.predict(frame, conf=conf, iou=iou, imgsz=imgsz, device=device,
-                           verbose=False, max_det=100)[0]
+                           verbose=False, max_det=300)[0]
     return result, postprocess_mode(model.predictor.model)
 
 

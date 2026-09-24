@@ -1668,7 +1668,7 @@ class Repository:
         return run
 
     def update_training_run(self, training_run_id: str, **patch: Any) -> None:
-        allowed = {"run_name", "save_dir", "best_model_path", "last_model_path", "metrics_json", "status"}
+        allowed = {"run_name", "save_dir", "best_model_path", "last_model_path", "metrics_json", "settings_json", "status"}
         updates = {key: value for key, value in patch.items() if key in allowed}
         if not updates:
             return

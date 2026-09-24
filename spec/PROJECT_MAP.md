@@ -30,6 +30,7 @@ files before editing behavior.
 | --- | --- | --- |
 | Review canvas, shortcuts, Edit menu, image removal | [UI](UI.md), [API](API.md), [Data Model](DATA_MODEL.md) | [Review editing and image removal](references/review-editing-and-image-removal.md) |
 | Training, optimizer, MuSGD, CUDA | [UI](UI.md), [API](API.md), [Runtime](RUNTIME.md), [Testing](TESTING.md) | [Jetson CUDA lesson](references/lesson-20260731-jetson-docker-cuda-training.md) |
+| YOLO26, DFL-free/L1 losses, STAL, NMS-free inference | [UI](UI.md), [Runtime](RUNTIME.md) | [YOLO26 compatibility](references/yolo26-compatibility.md) |
 | Model Convert, ONNX, LiteRT, architecture support | [UI](UI.md), [API](API.md), [Runtime](RUNTIME.md) | [Current conversion boundary](references/model-conversion-current.md) |
 | Stream Demo, webcam, uploaded video, inference engines, model version labels | [UI](UI.md), [API](API.md), [Runtime](RUNTIME.md) | [Stream Demo and model provenance](references/stream-demo.md) |
 | CLI terminal, editable Python utilities, staged inference plugins | [API](API.md), [Runtime](RUNTIME.md) | [Docker CLI workspace](references/cli-workspace.md) |

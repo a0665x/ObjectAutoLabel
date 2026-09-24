@@ -237,6 +237,14 @@ Inside Docker, the folders are `/app/data`, `/app/world_model`,
 are mounted read-only; generated training and conversion artifacts are written
 through the project workspace and indexed from `output_model/`.
 
+**YOLO26n:** select `yolo26n.pt` in Train with the pinned Ultralytics 8.4.130
+runtime. Its loss charts show Box / Class / **L1**, since the detection head is
+DFL-free. Native small-target assignment and progressive dual-head training are
+handled by Ultralytics; your selected optimizer remains in effect. Validate and
+Stream report NMS-free inference for this model, where confidence filtering
+still applies but NMS IoU suppression does not. ONNX/LiteRT exports retain the
+model's postprocessing contract. See [compatibility and verification details](spec/references/yolo26-compatibility.md).
+
 ## Optional Google, Facebook, or LINE Sign-in
 
 OAuth sign-in uses Authlib inside the existing FastAPI process. Copy `.env.example` to `.env`, configure an exact public URL and at least one provider credential pair, set a random session secret of at least 32 characters, then enable authentication and rebuild the selected image:

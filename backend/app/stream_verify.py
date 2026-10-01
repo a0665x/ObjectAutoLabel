@@ -17,7 +17,20 @@ def postprocess_mode(backend):
 
 
 def predict_frame(model, frame, *, conf, iou, imgsz, device):
+    from backend.app.litert_contract import prepare_litert_backend
+
+    # Load before the first frame so actual export dimensions and coordinate
+    # contracts apply to preprocessing as well as subsequent predictions.
+    if getattr(model, 'predictor', None) is None and str(getattr(model, 'model', '')).endswith('.tflite'):
+        model.predictor = model._smart_load('predictor')(
+            overrides={**model.overrides, 'conf': conf, 'iou': iou, 'imgsz': imgsz,
+                       'device': device, 'mode': 'predict', 'batch': 1, 'save': False},
+            _callbacks=model.callbacks,
+        )
+        model.predictor.setup_model(model=model.model, verbose=False)
     backend = getattr(getattr(model, "predictor", None), "model", None)
+    if backend is not None:
+        prepare_litert_backend(backend)
     if backend is not None and getattr(backend, "format", "pt") != "pt" and not getattr(backend, "dynamic", False):
         imgsz = getattr(backend, "imgsz", imgsz)
     # Ultralytics decodes each format and chooses NMS versus end-to-end from the

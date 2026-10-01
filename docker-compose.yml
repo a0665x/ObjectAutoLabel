@@ -15,6 +15,13 @@ services:
       - ./logs:/app/logs
       - ./world_model:/app/world_model:ro
       - ./input_model:/app/input_model:ro
+      # Optional external models retain their host absolute path in the container.
+      - type: bind
+        source: ${OBJECT_AUTOLABEL_EXTERNAL_MODEL_DIR:-./input_model}
+        target: ${OBJECT_AUTOLABEL_EXTERNAL_MODEL_DIR:-/app/external_models}
+        read_only: true
+        bind:
+          create_host_path: false
       - ./output_model:/app/output_model
       - ./cli_workspace:/app/cli_workspace
     environment:

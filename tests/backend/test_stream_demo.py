@@ -48,6 +48,55 @@ def test_stream_rejects_invalid_controls_and_arbitrary_pipeline(patch):
         stream.StreamConfig.model_validate({"model_id": "model", "source": "upload", "source_id": "video", **patch})
 
 
+@pytest.mark.parametrize('value', [-1, float('nan'), float('inf')])
+def test_stream_rejects_invalid_seek(value):
+    with pytest.raises(ValidationError):
+        stream.StreamConfig(model_id='m', source='upload', source_id='v', start_seconds=value)
+
+
+def test_uploaded_video_seek_is_an_argument_not_shell_code():
+    config = stream.StreamConfig(model_id='m', source='upload', source_id='v', start_seconds=12.5)
+    command = stream.decode_command(config, Path('/tmp/video with spaces.mp4'), None)
+    assert command[:6] == ['ffmpeg', '-nostdin', '-v', 'error', '-ss', '12.5']
+    assert command[command.index('-i') + 1] == '/tmp/video with spaces.mp4'
+    assert 'pad=640:360' in command[command.index('-vf') + 1]
+
+
+def test_close_drains_a_decoder_with_full_stdout():
+    import asyncio
+    import sys
+    async def check():
+        config = stream.StreamConfig(model_id='m', source='upload', source_id='v')
+        session = stream.StreamSession(config, '/model.pt', Path('/video.mp4'))
+        child = await session.spawn([sys.executable, '-c', 'import os; os.write(1, b"x" * 4000000)'])
+        await asyncio.sleep(.1)
+        await asyncio.wait_for(session.close(), 5)
+        assert child.returncode is not None
+    asyncio.run(check())
+
+
+def test_websocket_seek_checks_duration_and_starts_fresh_session(setup, monkeypatch):
+    repo, project, client = setup
+    monkeypatch.setattr(stream, 'list_models', lambda *_: [{'id': 'm', 'path': '/model.pt', 'format': 'pt'}])
+    monkeypatch.setattr(stream, 'capabilities', lambda: {'available': True, 'cuda': False, 'engines': {'pt': {'available': True}}})
+    monkeypatch.setattr(stream, 'resolve_upload', lambda *_: Path('/video.mp4'))
+    monkeypatch.setattr(stream, 'probe_video', lambda *_: {'duration': 20})
+    starts = []
+    class Session:
+        def __init__(self, config, *args):
+            starts.append(config.start_seconds)
+        async def run(self, ws):
+            await ws.send_json({'type': 'ended'})
+        async def close(self):
+            pass
+    monkeypatch.setattr(stream, 'StreamSession', Session)
+    for seconds in [20, 5, 0]:
+        with client.websocket_connect(f'/api/projects/{project["id"]}/stream-demo/live', headers={'origin': 'http://testserver'}) as socket:
+            socket.send_json({'model_id': 'm', 'source': 'upload', 'source_id': 'v', 'device': 'cpu', 'start_seconds': seconds})
+            assert socket.receive_json()['type'] == ('error' if seconds == 20 else 'ended')
+    assert starts == [5, 0]
+
+
 def test_upload_validation_and_cleanup(setup, monkeypatch):
     repo, project, client = setup
     url = f"/api/projects/{project['id']}/stream-demo/uploads"
@@ -64,6 +113,61 @@ def test_upload_validation_and_cleanup(setup, monkeypatch):
     monkeypatch.setattr(stream, "MAX_UPLOAD_BYTES", 2)
     assert client.post(url + "?filename=large.mp4", content=b"big").status_code == 413
     assert list(stream.upload_dir(repo, project["id"]).iterdir()) == []
+
+
+def test_websocket_resolves_only_current_project_schema(setup,monkeypatch):
+    repo,project,client=setup
+    labels=[{'class_id':0,'class_name':'Pedestrian','descriptors':['person']}]
+    schema=repo.create_class_schema(project['id'],'Labels',labels)
+    other=repo.create_project('other')
+    foreign=repo.create_class_schema(other['id'],'Foreign',labels)
+    monkeypatch.setattr(stream,'list_models',lambda *_:[{'id':'m','path':'/model.pt','format':'pt'}])
+    monkeypatch.setattr(stream,'capabilities',lambda:{'available':True,'cuda':False,'engines':{'pt':{'available':True}}})
+    monkeypatch.setattr(stream,'resolve_upload',lambda *_:Path('/video.mp4'))
+    monkeypatch.setattr(stream,'probe_video',lambda *_:{'duration':10})
+    class Session:
+        def __init__(self,*args): pass
+        async def run(self,ws): await ws.send_json({'type':'labels','names':self.label_names})
+        async def close(self): pass
+    monkeypatch.setattr(stream,'StreamSession',Session)
+    for schema_id,expected in [('auto',{'0':'Pedestrian'}),(schema['id'],{'0':'Pedestrian'}),('model',None),(foreign['id'],'error')]:
+        with client.websocket_connect(f'/api/projects/{project["id"]}/stream-demo/live',headers={'origin':'http://testserver'}) as ws:
+            ws.send_json({'model_id':'m','source':'upload','source_id':'v','device':'cpu','schema_id':schema_id})
+            message=ws.receive_json()
+            if expected=='error': assert message['type']=='error'
+            else: assert message['names']==expected
+
+
+def test_external_model_is_project_scoped_and_rejects_changed_files(setup, monkeypatch, tmp_path):
+    from backend.app import stream_models
+    repo, project, client = setup
+    path = tmp_path / 'old.onnx'
+    path.write_bytes(b'model')
+    monkeypatch.setattr(stream_models, 'inspect_external_model', lambda *_: {'format':'onnx','layout':'NCHW','available':True})
+    url = f"/api/projects/{project['id']}/stream-demo"
+    response = client.post(url+'/inspect-model',json={'path':str(path)})
+    assert response.status_code == 200
+    model_id = response.json()['id']
+    config = {'model_id':model_id,'source':'camera','source_id':'video0','device':'cpu'}
+    second = repo.create_project('another project')
+    assert client.post(f"/api/projects/{second['id']}/stream-demo/verify-command",json=config).status_code == 404
+    path.write_bytes(b'replaced model')
+    changed = client.post(url+'/verify-command',json=config)
+    assert changed.status_code == 422
+    assert 'changed' in changed.json()['detail']
+
+
+def test_tracking_yaml_import_preserves_names_validates_values_and_ignores_unrelated_env(setup):
+    _,_,client=setup
+    schema=client.get('/api/stream-demo/tracking-settings').json()
+    assert schema['defaults']['TRACKING_ID_STABILIZER_MATCH_THRESHOLD']==.65
+    url='/api/stream-demo/tracking-settings/import'
+    response=client.post(url,content='env:\n  TRACKING_ID_STABILIZER_CONFIRM_FRAMES: 7\n  AI_MODEL_PATH: ignored.tflite\n')
+    assert response.status_code==200
+    assert response.json()['settings']['TRACKING_ID_STABILIZER_CONFIRM_FRAMES']==7
+    for yaml in ['env:\n  TRACKING_BRIDGE_TTL_MS: -1','env:\n  TRACKING_BRIDGE_CONF_DECAY: .nan','env:\n  TRACKING_BRIDGE_TYPO: 1','env: []']:
+        assert client.post(url,content=yaml).status_code==422
+    assert client.post(url,content='x'*65537).status_code==413
 
 
 def test_corrupt_upload_is_not_published(setup, monkeypatch):

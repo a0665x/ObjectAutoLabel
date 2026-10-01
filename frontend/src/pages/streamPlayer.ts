@@ -1,4 +1,4 @@
-export function createStreamPlayer(video: HTMLVideoElement, mime: string, onError: (message: string) => void) {
+export function createStreamPlayer(video: HTMLVideoElement, mime: string, onError: (message: string) => void, live = true) {
   if (typeof MediaSource === "undefined" || !MediaSource.isTypeSupported(mime)) {
     throw new Error("This browser cannot play H.264 streaming video. Use a current Chrome, Edge, or Safari browser.");
   }
@@ -9,6 +9,8 @@ export function createStreamPlayer(video: HTMLVideoElement, mime: string, onErro
   let queuedBytes = 0;
   let ending = false;
   let disposed = false;
+  let paused = false;
+  let started = false;
   video.src = url;
   function pump() {
     if (disposed || !buffer || buffer.updating || media.readyState !== "open") return;
@@ -22,8 +24,8 @@ export function createStreamPlayer(video: HTMLVideoElement, mime: string, onErro
       else if (ending) media.endOfStream();
       if (video.buffered.length) {
         const edge = video.buffered.end(video.buffered.length - 1);
-        if (edge - video.currentTime > 1.5) video.currentTime = Math.max(0, edge - 0.3);
-        if (video.paused) void video.play().catch(() => undefined);
+        if (live && edge - video.currentTime > 1.5) video.currentTime = Math.max(0, edge - 0.3);
+        if (!started && !paused) { started = true; void video.play().catch(() => undefined); }
       }
     } catch (error) { onError(error instanceof Error ? error.message : "Stream playback failed"); }
   }
@@ -37,6 +39,10 @@ export function createStreamPlayer(video: HTMLVideoElement, mime: string, onErro
     } catch (error) { onError(String(error)); }
   }, { once: true });
   return {
+    setPaused(value: boolean) {
+      paused = value;
+      if (paused) video.pause(); else void video.play().catch(() => undefined);
+    },
     append(chunk: ArrayBuffer) {
       if (disposed) return;
       queuedBytes += chunk.byteLength;

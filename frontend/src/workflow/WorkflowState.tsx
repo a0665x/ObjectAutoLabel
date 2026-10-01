@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../api/client";
+import {assignedRecipe, recipeIssue, sameRecipe, sourcePages} from './composition';
 
 export type Stage = "pseudo" | "augmentation" | "open_data" | "split" | "training" | "conversion";
 export type Recipe = { pseudo_label_run_id: string | null; augmentation_run_id: string | null; open_data_import_id: string | null };
@@ -7,16 +8,24 @@ export type Version = { id: string; name: string; count: number; settings: Recor
 export type Composition = Recipe & { id: string; name: string; reason: string; created_at: string };
 export type WorkflowState = { project_id: string; assignments: Partial<Record<Stage, string>>; composition_id: string | null; compositions: Composition[]; catalog: Record<Stage, Version[]> };
 export const stageNames: Record<Stage, string> = { pseudo: "Pseudo", augmentation: "Augment", open_data: "Open Data", split: "Split", training: "Train", conversion: "Convert" };
-type Runtime = { state: WorkflowState | null; busy: boolean; error: string; reload: () => Promise<void>; change: (operation: () => Promise<WorkflowState>) => Promise<void>; projectId: string };
+export type VersionFocus = {stage:Stage; id:string; serial:number};
+type Runtime = { state: WorkflowState | null; busy: boolean; error: string; reload: () => Promise<void>; change: (operation: () => Promise<WorkflowState>) => Promise<WorkflowState|null>; projectId: string;
+  draft:Recipe; setDraft:(draft:Recipe)=>void; saveDraft:(name?:string)=>Promise<Composition>;
+  focus:VersionFocus|null; viewVersion:(stage:Stage,id:string)=>void; backToSplit:()=>void;
+  useSplitForTraining:(id:string)=>Promise<void>;
+};
 const Context = createContext<Runtime | null>(null);
 export const useWorkflow = () => useContext(Context);
 
-export function WorkflowProvider({ projectId, revision, children }: { projectId: string; revision: string; children: ReactNode }) {
+export function WorkflowProvider({ projectId, revision, children, onNavigate }: { projectId: string; revision: string; children: ReactNode; onNavigate?:(page:string)=>void }) {
   const [state, setState] = useState<WorkflowState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const sequence = useRef(0);
   const locked = useRef(false);
+  const [draftOverride,setDraftOverride]=useState<Recipe|null>(null);
+  const [focus,setFocus]=useState<VersionFocus|null>(null);
+  const draft=draftOverride??assignedRecipe(state);
   const reload = useCallback(async () => {
     if (!projectId || locked.current) return;
     const ticket = ++sequence.current;
@@ -28,15 +37,36 @@ export function WorkflowProvider({ projectId, revision, children }: { projectId:
   useEffect(() => { void reload(); }, [reload, revision]);
   useEffect(() => { const timer = window.setInterval(() => void reload(), 5000); return () => { sequence.current++; window.clearInterval(timer); }; }, [reload]);
   async function change(operation: () => Promise<WorkflowState>) {
-    if (locked.current) return;
+    if (locked.current) return null;
     locked.current = true;
     const ticket = ++sequence.current;
     setBusy(true); setError("");
-    try { const next = await operation(); if (ticket === sequence.current) setState(next); }
-    catch (cause) { if (ticket === sequence.current) setError(cause instanceof Error ? cause.message : String(cause)); }
+    try { const next = await operation(); if (ticket === sequence.current) {setState(next);return next;} return null; }
+    catch (cause) { if (ticket === sequence.current) setError(cause instanceof Error ? cause.message : String(cause)); return null; }
     finally { locked.current = false; setBusy(false); }
   }
-  return <Context.Provider value={{ state, busy, error, reload, change, projectId }}>{children}</Context.Provider>;
+  async function saveDraft(name?:string):Promise<Composition> {
+    if(locked.current)throw new Error('Wait for the current operation to finish.');
+    const issue=recipeIssue(state,draft);
+    if(issue)throw new Error(issue);
+    const existing=state!.compositions.find(item=>!item.reason&&sameRecipe(item,draft)&&(!name||item.name===name));
+    if(existing)return existing;
+    let number=state!.compositions.length+1;
+    while(state!.compositions.some(item=>item.name===`Combination ${number}`))number++;
+    const next=await change(()=>api.saveComposition(projectId,{...draft,name:name?.trim()||`Combination ${number}`}));
+    const saved=next?.compositions.find(item=>item.id===next.composition_id&&sameRecipe(item,draft));
+    if(!saved)throw new Error('Could not save these inputs. Check the source versions and retry.');
+    return saved;
+  }
+  function viewVersion(stage:Stage,id:string) {
+    if(!state?.catalog[stage].some(item=>item.id===id))return;
+    setFocus(current=>({stage,id,serial:(current?.serial??0)+1}));
+    onNavigate?.(sourcePages[stage]);
+  }
+  return <Context.Provider value={{ state, busy, error, reload, change, projectId, draft, setDraft:setDraftOverride, saveDraft, focus, viewVersion,
+    backToSplit:()=>{setFocus(null);onNavigate?.('split');},
+    useSplitForTraining:async id=>{const next=await change(()=>api.assignWorkflow(projectId,'split',id));if(next)onNavigate?.('train');}
+  }}>{children}</Context.Provider>;
 }
 
 export function VersionDetails({ version }: { version: Version }) {

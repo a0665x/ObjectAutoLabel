@@ -21,11 +21,11 @@ class FakeXHR {
 }
 afterEach(() => vi.unstubAllGlobals());
 
-it("bounds upload waiting and returns an actionable timeout", async () => {
+it("allows long large-file uploads and returns an actionable transport timeout", async () => {
   vi.stubGlobal("XMLHttpRequest", FakeXHR);
   const promise = uploadStreamVideo("p1", new File(["video"], "clip.mp4"), vi.fn(), new AbortController().signal);
   const failed = expect(promise).rejects.toThrow("Video upload timed out");
-  expect(FakeXHR.instance.timeout).toBe(330000);
+  expect(FakeXHR.instance.timeout).toBe(0);
   FakeXHR.instance.ontimeout?.();
   await failed;
 });

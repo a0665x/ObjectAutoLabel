@@ -1,7 +1,7 @@
-export type StreamModel = { id: string; conversion_id: string; conversion_label: string; label: string; format: "pt" | "onnx" | "tflite"; layout?: "NCHW" | "NHWC"; input_shape?: number[] | null; available?: boolean; reason?: string | null };
-export type StreamUpload = { id: string; name: string; width: number; height: number; fps: number; duration: number; bytes: number };
+export type StreamModel = { id: string; conversion_id: string; conversion_label: string; schema_id?: string | null; label: string; format: "pt" | "onnx" | "tflite"; layout?: "NCHW" | "NHWC"; input_shape?: (number | string)[] | null; output_shape?: (number | string)[] | null; coordinates?: string; available?: boolean; reason?: string | null };
+export type StreamUpload = { id: string; name: string; width: number; height: number; fps: number; duration: number; duration_source?: string; bytes: number };
 export type CameraMode = { id: string; label: string; fps: number };
-export type StreamCapabilities = { available: boolean; missing_plugins: string[]; cameras: Array<{ id: string; label: string; modes: CameraMode[]; error?: string }>; cuda: boolean; mime: string; max_upload_bytes: number; engines: Record<StreamModel["format"], { available: boolean; device: string; reason?: string }> };
+export type StreamCapabilities = { available: boolean; missing_plugins: string[]; cameras: Array<{ id: string; label: string; modes: CameraMode[]; error?: string }>; cuda: boolean; mime: string; max_upload_bytes: number | null; engines: Record<StreamModel["format"], { available: boolean; device: string; reason?: string }> };
 
 export async function streamRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
@@ -14,7 +14,7 @@ export function uploadStreamVideo(projectId: string, file: File, onProgress: (pe
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `/api/projects/${projectId}/stream-demo/uploads?filename=${encodeURIComponent(file.name)}`);
-    xhr.timeout = 330000;
+    xhr.timeout = 0; // Large 4K uploads have no total-time deadline.
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
     xhr.upload.onprogress = (event) => { if (event.lengthComputable) onProgress(Math.round(event.loaded / event.total * 100)); };
     const abort = () => xhr.abort();

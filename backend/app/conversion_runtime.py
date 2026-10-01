@@ -191,6 +191,8 @@ def _torch2litert_with_layout(model, im, file: Path, metadata: dict, prefix: str
     edge_model = litert_torch.convert(export_model, (im,))
     tflite_file = Path(file).with_name(f"{Path(file).stem}_nhwc.tflite")
     edge_model.export(tflite_file)
+    metadata = {**(metadata or {}), 'oal_input_layout': layout,
+                'oal_box_coordinates': 'pixels' if (metadata or {}).get('end2end') else 'normalized'}
     with zipfile.ZipFile(tflite_file, "a", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("metadata.json", json.dumps(metadata or {}))
     return tflite_file

@@ -1,22 +1,39 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { Film, Play, Square, RefreshCw, Upload, Trash2, Maximize, Camera, Copy, Check, Code } from "lucide-react";
-import type { Project } from "../types";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Film, Play, Square, RefreshCw, Upload, Trash2, Maximize, Copy, Check, Code } from "lucide-react";
+import type { Project, Language, ClassSchema } from "../types";
+import { StreamSegments, StreamSwitch } from './StreamControls';
+import { streamUiText, type StreamUiKey } from './streamUiText';
+import { trackingText } from './trackingText';
 import { streamRequest, uploadStreamVideo, type StreamCapabilities, type StreamModel, type StreamUpload } from "../api/streamDemo";
 import { createStreamPlayer } from "./streamPlayer";
+import { StreamTrackingOverlay, type TrackingFrame } from "./StreamTrackingOverlay";
+import { TrackingSettingsPanel, type TrackingSettings, type TrackingViz } from './TrackingSettingsPanel';
 import type { CliControl } from "./CliWorkspace";
 const CliWorkspace = lazy(() => import("./CliWorkspace").then((module) => ({ default: module.CliWorkspace })));
 
-export function StreamDemoPage({ project }: { project: Project }) {
+export function StreamDemoPage({ project, language='en' }: { project: Project; language?:Language }) {
+  const s=(key:StreamUiKey)=>streamUiText(language,key);
+  const t=(key:Parameters<typeof trackingText>[1])=>trackingText(language,key);
+  const [labelSchemas,setLabelSchemas]=useState<ClassSchema[]>([]);
+  const [schemaId,setSchemaId]=useState('auto');
+  const [schemaError,setSchemaError]=useState(false);
   const cliControl = useRef<CliControl | null>(null);
   const [cliFrame, setCliFrame] = useState("");
   const [cliActive, setCliActive] = useState(false);
   const cliActiveRef = useRef(false);
   const starting = useRef(false);
+  const generation = useRef(0);
   const [caps, setCaps] = useState<StreamCapabilities>();
   const [models, setModels] = useState<StreamModel[]>([]);
   const [uploads, setUploads] = useState<StreamUpload[]>([]);
   const [conversionId, setConversionId] = useState("");
-  const [modelId, setModelId] = useState("");
+  const [conversionModelId, setModelId] = useState("");
+  const [modelMode, setModelMode] = useState("conversion");
+  const [modelPath, setModelPath] = useState("");
+  const [coordinates, setCoordinates] = useState("auto");
+  const [externalModel, setExternalModel] = useState<StreamModel>();
+  const [inspecting, setInspecting] = useState(false);
+  const modelId = modelMode === "path" ? externalModel?.id ?? "" : conversionModelId;
   const [source, setSource] = useState<"upload" | "camera">("upload");
   const [uploadId, setUploadId] = useState("");
   const [cameraId, setCameraId] = useState("");
@@ -37,6 +54,17 @@ export function StreamDemoPage({ project }: { project: Project }) {
   const [uploadError, setUploadError] = useState("");
   const [stats, setStats] = useState({ fps: 0, inference_ms: 0, frames: 0, detections: 0 });
   const [postprocess, setPostprocess] = useState("Auto");
+  const [tracking, setTracking] = useState(true);
+  const [trackingSettings,setTrackingSettings] = useState<TrackingSettings>({});
+  const [trackingViz,setTrackingViz] = useState<TrackingViz>({trails:true,prediction:true,topology:false,diagnostics:true});
+  const [selectedTrack, setSelectedTrack] = useState<string | null>(null);
+  const trackingFrames = useRef<TrackingFrame[]>([]);
+  const [paused, setPaused] = useState(false);
+  const [position, setPosition] = useState(0);
+  const [seekDraft, setSeekDraft] = useState<number | null>(null);
+  const [jumpTime, setJumpTime] = useState(0);
+  const offset = useRef(0);
+  const updateTime = useCallback((time: number) => setPosition(Math.round((offset.current + time) * 10) / 10), []);
   const [command, setCommand] = useState("");
   const [commandError, setCommandError] = useState("");
   const [copied, setCopied] = useState(false);
@@ -46,7 +74,9 @@ export function StreamDemoPage({ project }: { project: Project }) {
   const playerRef = useRef<ReturnType<typeof createStreamPlayer> | null>(null);
   const uploadRef = useRef<AbortController | null>(null);
   const busy = state === "Connecting" || state === "Live";
-  const selectedModel = models.find((model) => model.id === modelId);
+  const selectedModel = modelMode === "path" ? externalModel : models.find((model) => model.id === modelId);
+  const autoSchema=labelSchemas.find(s=>s.id===selectedModel?.schema_id) ?? (labelSchemas.length===1?labelSchemas[0]:undefined);
+  const selectedSchema=schemaId==='auto'?autoSchema:labelSchemas.find(s=>s.id===schemaId);
   const camera = caps?.cameras.find((item) => item.id === cameraId);
   const mode = camera?.modes.find((item) => item.id === cameraMode);
   const upload = uploads.find((item) => item.id === uploadId);
@@ -55,14 +85,35 @@ export function StreamDemoPage({ project }: { project: Project }) {
   const effectiveDevice = selectedModel?.format === "pt" && caps?.cuda ? device : "cpu";
 
   function dispose() {
+    generation.current += 1;
     const socket = socketRef.current;
     socketRef.current = null;
     if (socket) { socket.onclose = null; socket.onmessage = null; socket.onerror = null; socket.onopen = null; socket.close(); }
     playerRef.current?.dispose();
     playerRef.current = null;
+    trackingFrames.current = [];
+    setSelectedTrack(null);
+  }
+  async function releaseStream() {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState === WebSocket.CLOSED) return;
+    await new Promise<void>((resolve, reject) => {
+      const timeout = window.setTimeout(() => { dispose(); reject(new Error("Stream did not stop; retry playback")); }, 15000);
+      socket.onmessage = null; socket.onerror = null;
+      socket.onclose = () => { window.clearTimeout(timeout); resolve(); };
+      const requestStop = () => socket.send(JSON.stringify({ type: "stop" }));
+      if (socket.readyState === WebSocket.OPEN) requestStop(); else socket.onopen = requestStop;
+    });
+  }
+  function togglePause() {
+    const value = !paused;
+    playerRef.current?.setPaused(value);
+    if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({ type: "playback", paused: value }));
+    setPaused(value);
   }
   function stop() {
     dispose();
+    offset.current = 0; setPosition(0); setJumpTime(0); setSeekDraft(null); setPaused(false);
     void cliControl.current?.stopDisplay().then(() => { cliActiveRef.current = false; setCliActive(false); setCliFrame(""); setState("Stopped"); }).catch((reason) => setError(String(reason)));
     if (!cliActiveRef.current) setState("Stopped");
   }
@@ -85,13 +136,17 @@ export function StreamDemoPage({ project }: { project: Project }) {
   async function refresh() {
     setLoading(true);
     setError("");
+    setSchemaError(false);
     try {
-      const [nextCaps, nextModels, nextUploads] = await Promise.all([
+      const [nextCaps, nextModels, nextUploads, nextSchemas] = await Promise.all([
         streamRequest<StreamCapabilities>("/api/stream-demo/capabilities"),
         streamRequest<StreamModel[]>(`/api/projects/${project.id}/stream-demo/models`),
-        streamRequest<StreamUpload[]>(`/api/projects/${project.id}/stream-demo/uploads`)
+        streamRequest<StreamUpload[]>(`/api/projects/${project.id}/stream-demo/uploads`),
+        streamRequest<ClassSchema[]>(`/api/projects/${project.id}/class-schemas`).catch(()=>{setSchemaError(true);return [] as ClassSchema[];})
       ]);
       setCaps(nextCaps); setModels(nextModels); setUploads(nextUploads);
+      setLabelSchemas(nextSchemas);
+      setSchemaId(value=>value==='auto'||value==='model'||nextSchemas.some(s=>s.id===value)?value:'auto');
       const usable = nextModels.filter((model) => model.available !== false);
       setConversionId((value) => nextModels.some((m) => m.conversion_id === value) ? value : usable[0]?.conversion_id ?? nextModels[0]?.conversion_id ?? "");
       setModelId((value) => nextModels.some((m) => m.id === value && m.available !== false) ? value : usable[0]?.id ?? nextModels[0]?.id ?? "");
@@ -113,11 +168,13 @@ export function StreamDemoPage({ project }: { project: Project }) {
   useEffect(() => {
     if (cliActiveRef.current) return;
     dispose();
+    offset.current = 0; setPosition(0); setJumpTime(0); setSeekDraft(null); setPaused(false);
     setState((source === "upload" ? uploadId : cameraMode) ? "Ready" : "Idle");
     setStats({ fps: 0, inference_ms: 0, frames: 0, detections: 0 });
-  }, [source, uploadId, cameraMode, modelId]);
+  }, [source, uploadId, cameraMode, modelId, schemaId]);
   useEffect(() => {
     setCommand(""); setCommandError(""); setCopied(false);
+    if (modelMode === "path") return;
     if (!modelId || !(source === "upload" ? uploadId : cameraId)) return;
     let cancelled = false;
     const timer = window.setTimeout(() => {
@@ -142,25 +199,37 @@ export function StreamDemoPage({ project }: { project: Project }) {
     } catch (reason) { setCommandError(String(reason)); }
   }
 
-  async function start() {
+  async function start(startSeconds = 0) {
+    if (schemaError && schemaId !== 'model') return;
     if (starting.current || !caps || !videoRef.current || !selectedModel) return;
     starting.current = true;
+    const requestedGeneration = generation.current;
     setState("Connecting");
-    try { if (cliControl.current) await cliControl.current.stopDisplay(); }
+    try {
+      if (cliControl.current) await cliControl.current.stopDisplay();
+      if (socketRef.current) await releaseStream();
+    }
     catch (reason) { starting.current = false; setState("Failed"); setError(String(reason)); return; }
+    if (generation.current !== requestedGeneration || !videoRef.current) { starting.current = false; return; }
     cliActiveRef.current = false; setCliActive(false); setCliFrame("");
     dispose(); setError(""); setState("Connecting"); setPostprocess("Auto"); setStats({ fps: 0, inference_ms: 0, frames: 0, detections: 0 });
+    offset.current = startSeconds; setPosition(startSeconds); setSeekDraft(null); setPaused(false);
     try {
-      playerRef.current = createStreamPlayer(videoRef.current, caps.mime, fail);
+      playerRef.current = createStreamPlayer(videoRef.current, caps.mime, fail, source === "camera");
       const socket = new WebSocket(`${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/projects/${project.id}/stream-demo/live`);
       socket.binaryType = "arraybuffer";
       socketRef.current = socket;
       let ended = false;
       socket.onopen = () => socket.send(JSON.stringify({ model_id: modelId, source, source_id: source === "upload" ? uploadId : cameraId,
-        camera_mode: cameraMode, width, fps, bitrate, conf, iou, imgsz, device: effectiveDevice }));
+        camera_mode: cameraMode, width, fps, bitrate, conf, iou, imgsz, device: effectiveDevice, tracking, tracking_settings: trackingSettings, schema_id:schemaId==='auto'?(selectedSchema?.id??'model'):schemaId, start_seconds: startSeconds }));
       socket.onmessage = (event) => {
         if (event.data instanceof ArrayBuffer) { playerRef.current?.append(event.data); return; }
         const message = JSON.parse(event.data);
+        if (message.type === "tracks") {
+          trackingFrames.current.push(message);
+          if (trackingFrames.current.length > 3600) trackingFrames.current.shift();
+          return;
+        }
         if (message.postprocess) setPostprocess(message.postprocess);
         if (message.type === "started") setState("Live");
         if (message.type === "stats") setStats(message);
@@ -175,13 +244,23 @@ export function StreamDemoPage({ project }: { project: Project }) {
     finally { starting.current = false; }
   }
 
+  function seek(seconds: number) {
+    if (source !== "upload" || !upload || state === "Connecting" || cliActive) return;
+    void start(Math.max(0, Math.min(seconds, Math.max(0, upload.duration - 1 / fps))));
+  }
+
+  function selectTrack(id: string | null, time = videoRef.current?.currentTime ?? 0) {
+    setSelectedTrack(id);
+    if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({type:'select_track',id,time}));
+  }
+
   async function uploadVideo(file?: File) {
     if (!file) return;
     setUploadNotice(""); setUploadError(""); setUploadName(file.name);
     if (!caps) { setUploadError("Video services are still loading"); return; }
     if (!/\.(mp4|mov|mkv|webm|avi|m4v)$/i.test(file.name)) { setUploadError("Select an MP4, MOV, MKV, WebM, AVI, or M4V video file"); return; }
     if (!file.size) { setUploadError("The selected video file is empty"); return; }
-    if (file.size > caps.max_upload_bytes) { setUploadError("Video exceeds the 1 GiB upload limit"); return; }
+    if (caps.max_upload_bytes !== null && file.size > caps.max_upload_bytes) { setUploadError("Video exceeds the configured upload limit"); return; }
     const controller = new AbortController(); uploadRef.current = controller;
     setProgress(0); setError("");
     try {
@@ -194,73 +273,122 @@ export function StreamDemoPage({ project }: { project: Project }) {
 
   return <section className="stream-demo" aria-labelledby="stream-heading">
     <header className="stream-header"><h2 id="stream-heading"><Film size={22} />Stream Demo</h2>
-      <button type="button" className="secondary" title="Refresh models and cameras" aria-label="Refresh models and cameras" disabled={busy || loading} onClick={() => void refresh()}><RefreshCw size={17} /></button>
+      <button type="button" className="secondary" title={s('refresh')} aria-label={s('refresh')} disabled={busy || loading} onClick={() => void refresh()}><RefreshCw size={17} /></button>
     </header>
     {error && <p className="review-error" role="alert">{error}</p>}
     {caps && !caps.available && <p className="review-error" role="alert">GStreamer unavailable: {caps.missing_plugins.join(", ")}</p>}
-    <div className="stream-models">
-      <label>Conversion version<select aria-label="Conversion version" value={conversionId} disabled={busy || loading} onChange={(event) => {
+    <div className="stream-setup-grid"><div className="stream-setup-card">
+    <StreamSegments label={s('modelSource')} value={modelMode} disabled={busy || inspecting}
+      onChange={setModelMode} options={[{value:'conversion',label:s('conversion')},{value:'path',label:s('path')}]}/>
+    {modelMode === "conversion" ? <div className="stream-models">
+      <label>{s('conversion')}<select aria-label={s('conversion')} value={conversionId} disabled={busy || loading} onChange={(event) => {
         const id = event.target.value; setConversionId(id); setModelId(models.find((m) => m.conversion_id === id && m.available !== false)?.id ?? models.find((m) => m.conversion_id === id)?.id ?? "");
-      }}><option value="" disabled>{loading ? "Loading..." : "Select conversion"}</option>{conversions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
-      <label>Model format<select aria-label="Model format" value={modelId} disabled={busy || loading} onChange={(event) => setModelId(event.target.value)}>
-        <option value="" disabled>Select model format</option>{models.filter((m) => m.conversion_id === conversionId).map((model) => { const unavailable = model.available === false || !caps?.engines[model.format].available; return <option key={model.id} value={model.id} disabled={unavailable}>{model.label}{unavailable ? ` · ${model.reason ?? caps?.engines[model.format].reason ?? "Unavailable"}` : ""}</option>; })}
+      }}><option value="" disabled>{loading ? s('loading') : s('selectConversion')}</option>{conversions.map(([id, label]) => <option key={id} value={id}>{label.split(" · ")[0]}</option>)}</select></label>
+      <label>{s('format')}<select aria-label={s('format')} value={modelId} disabled={busy || loading} onChange={(event) => setModelId(event.target.value)}>
+        <option value="" disabled>{s('selectFormat')}</option>{models.filter((m) => m.conversion_id === conversionId).map((model) => { const unavailable = model.available === false || !caps?.engines[model.format].available; return <option key={model.id} value={model.id} disabled={unavailable}>{model.label.split(' · ').slice(0,2).join(' · ')}{unavailable ? ` · ${s('unavailable')}` : ''}</option>; })}
       </select></label>
-    </div>
-    {selectedModel && <p className="stream-lineage">{selectedModel.conversion_label}</p>}
-    {!loading && !models.length && <p className="muted">No completed conversion models in this project.</p>}
+    </div> : <fieldset className="stream-local-model" disabled={busy || inspecting}><legend>{s('localModel')}</legend>
+      <label>{s('modelPath')}<input type="text" aria-label={s('modelPath')} value={modelPath} placeholder="/app/input_model/model.onnx" onChange={e => { setModelPath(e.target.value); setExternalModel(undefined); }} /></label>
+      <label>{s('coordinates')}<select aria-label={s('coordinates')} value={coordinates} onChange={e => { setCoordinates(e.target.value); setExternalModel(undefined); }}><option value="auto">{s('auto')}</option><option value="pixels">{s('pixels')}</option><option value="normalized">{s('normalized')}</option></select></label>
+      <button type="button" className="secondary" disabled={!modelPath.trim()} onClick={async () => {
+        setInspecting(true); setError(""); setExternalModel(undefined);
+        try { setExternalModel(await streamRequest<StreamModel>(`/api/projects/${project.id}/stream-demo/inspect-model`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: modelPath.trim(), coordinates }) })); }
+        catch (err) { setError(err instanceof Error ? err.message : "Model inspection failed"); }
+        finally { setInspecting(false); }
+      }}>{inspecting ? s('inspecting') : s('inspect')}</button>
+      <p className="muted">{s('pathHint')}</p>
+      {externalModel && <p role="status">{externalModel.format.toUpperCase()} · {externalModel.layout} · input [{externalModel.input_shape?.join(", ")}] · output [{externalModel.output_shape?.join(", ") ?? "native YOLO"}] · {externalModel.coordinates}</p>}
+    </fieldset>}
+    {selectedModel?.conversion_label && <details className="stream-model-details"><summary>{s('modelDetails')}</summary><p className="stream-lineage">{selectedModel.conversion_label}</p><p className="stream-lineage">{selectedModel.label}</p></details>}
+    {modelMode === "conversion" && !loading && !models.length && <p className="muted">{s('noModels')}</p>}
     {selectedModel?.available === false && <p className="review-error">Model unavailable: {selectedModel.reason}</p>}
+    </div><div className="stream-label-schema stream-setup-card">
+      <label>{t('schema')}<select aria-label={t('schema')} value={schemaId} disabled={busy||loading} onChange={e=>setSchemaId(e.target.value)}>
+        <option value="auto">{t('auto')}</option><option value="model">{t('native')}</option>
+        {labelSchemas.map(s=><option key={s.id} value={s.id}>{s.name} · {s.id.slice(0,8)}</option>)}
+      </select></label>
+      {selectedSchema && <p className="stream-lineage">{selectedSchema.name} · {selectedSchema.classes.map(c=>`${c.class_id}: ${c.class_name}`).join(' · ')}</p>}
+      <small>{t('schemaHint')}</small>
+      {schemaError?<p role="alert" className="review-error">{t('schemaError')}</p>:schemaId==='auto'&&!autoSchema&&<p className="muted">{t(labelSchemas.length?'schemaAmbiguous':'schemaNone')}</p>}
+    </div>
+    </div>
     <div className="stream-layout">
       <div className="stream-settings">
-        <fieldset disabled={busy || loading || progress !== null}><legend>Source</legend>
-          <div className="stream-source-switch"><label><input type="radio" name="stream-source" checked={source === "upload"} onChange={() => setSource("upload")} /><Film size={16} />Video file</label><label><input type="radio" name="stream-source" checked={source === "camera"} onChange={() => setSource("camera")} /><Camera size={16} />Host camera</label></div>
+        <fieldset disabled={busy || loading || progress !== null}><legend>{s('source')}</legend>
+          <StreamSegments label={s('source')} hideLabel value={source} onChange={value=>setSource(value as 'upload'|'camera')}
+            options={[{value:'upload',label:s('videoFile')},{value:'camera',label:s('hostCamera')}]}/>
           {source === "upload" ? <>
-            <label>Video<select aria-label="Video" value={uploadId} onChange={(event) => setUploadId(event.target.value)}><option value="">Select video</option>{uploads.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-            <div className="stream-upload-actions"><label className="stream-file-button"><Upload size={16} /><span>Upload video</span><input aria-label="Upload video" type="file" accept=".mp4,.mov,.mkv,.webm,.avi,.m4v" onChange={(event) => { void uploadVideo(event.target.files?.[0]); event.target.value = ""; }} /></label>
-              <button type="button" className="secondary danger" title="Delete uploaded video" aria-label="Delete uploaded video" disabled={!uploadId} onClick={async () => {
-                if (!window.confirm(`Delete ${upload?.name ?? "video"}?`)) return;
+            <label>{s('video')}<select aria-label={s('video')} value={uploadId} onChange={(event) => setUploadId(event.target.value)}><option value="">{s('selectVideo')}</option>{uploads.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+            <div className="stream-upload-actions"><label className="stream-file-button"><Upload size={16} /><span>{s('upload')}</span><input aria-label={s('upload')} type="file" accept=".mp4,.mov,.mkv,.webm,.avi,.m4v" onChange={(event) => { void uploadVideo(event.target.files?.[0]); event.target.value = ""; }} /></label>
+              <button type="button" className="secondary danger" title={s('deleteVideo')} aria-label={s('deleteVideo')} disabled={!uploadId} onClick={async () => {
+                if (!window.confirm(`${s('deleteConfirm')} ${upload?.name ?? ''}`)) return;
                 try { await streamRequest(`/api/projects/${project.id}/stream-demo/uploads/${uploadId}`, { method: "DELETE" }); await refresh(); } catch (reason) { setError(String(reason)); }
               }}><Trash2 size={16} /></button></div>
-            {upload && <small>{upload.width} × {upload.height} · {upload.fps} FPS · {upload.duration.toFixed(1)} s</small>}
+            <small>{s('uploadHint')}</small>
+            {upload && <small>{upload.width} × {upload.height} · {upload.fps} FPS · {upload.duration > 0 ? `${upload.duration.toFixed(1)} s` : s('unknownDuration')}{upload.duration_source === 'packets' ? ` · ${s('recovered')}` : ''}</small>}
           </> : <>
-            <label>Camera<select aria-label="Camera" value={cameraId} onChange={(event) => setCameraId(event.target.value)}><option value="">Select camera</option>{caps?.cameras.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>
-            {!caps?.cameras.length && <p className="muted">No host cameras detected.</p>}
-            <label>Capture mode<select aria-label="Capture mode" value={cameraMode} onChange={(event) => setCameraMode(event.target.value)}><option value="">Select capture mode</option>{camera?.modes.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>
+            <label>{s('camera')}<select aria-label={s('camera')} value={cameraId} onChange={(event) => setCameraId(event.target.value)}><option value="">{s('selectCamera')}</option>{caps?.cameras.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>
+            {!caps?.cameras.length && <p className="muted">{s('noCameras')}</p>}
+            <label>{s('captureMode')}<select aria-label={s('captureMode')} value={cameraMode} onChange={(event) => setCameraMode(event.target.value)}><option value="">{s('selectCapture')}</option>{camera?.modes.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>
             {camera?.error && <p className="review-error">{camera.error}</p>}
           </>}
         </fieldset>
-        {progress !== null && <div className="stream-upload-progress" role="status"><progress aria-label="Video upload progress" max={100} value={progress} /><span>{uploadName} · {progress === 100 ? "Checking video..." : `Uploading ${progress}%`}</span><button type="button" title="Cancel upload" aria-label="Cancel upload" onClick={() => uploadRef.current?.abort()}><Square size={16} /></button></div>}
+        {progress !== null && <div className="stream-upload-progress" role="status"><progress aria-label={s('uploadProgress')} max={100} value={progress} /><span>{uploadName} · {progress === 100 ? s('checking') : `${s('uploading')} ${progress}%`}</span><button type="button" title={s('cancelUpload')} aria-label={s('cancelUpload')} onClick={() => uploadRef.current?.abort()}><Square size={16} /></button></div>}
         {uploadNotice && <p className="stream-upload-notice" role="status">{uploadNotice}</p>}
         {uploadError && <p className="review-error stream-upload-notice" role="alert">{uploadError}</p>}
-        <fieldset disabled={busy || loading}><legend>Video output</legend><div className="stream-input-grid">
-          <label>Resolution<select aria-label="Resolution" value={width} onChange={(e) => setWidth(Number(e.target.value))}>{[640, 960, 1280].map((value) => <option key={value} value={value}>{value} × {value * 9 / 16}</option>)}</select></label>
+        <details className="stream-output-settings"><summary>{s('output')} <small>{width} × {width*9/16} · {fps} FPS</small></summary><fieldset disabled={busy || loading}><legend className="stream-sr-only">{s('output')}</legend><div className="stream-input-grid">
+          <label>{s('resolution')}<select aria-label={s('resolution')} value={width} onChange={(e) => setWidth(Number(e.target.value))}>{[640, 960, 1280].map((value) => <option key={value} value={value}>{value} × {value * 9 / 16}</option>)}</select></label>
           <label>FPS<input aria-label="FPS" type="number" min={1} max={source === "camera" && mode ? Math.min(60, Math.floor(mode.fps)) : 60} value={fps} onChange={(e) => setFps(Number(e.target.value))} /></label>
-          <label>Bitrate (kbps)<input aria-label="Bitrate (kbps)" type="number" min={100} max={20000} step={100} value={bitrate} onChange={(e) => setBitrate(Number(e.target.value))} /></label>
-        </div></fieldset>
-        <fieldset><legend>Inference</legend><div className="stream-input-grid">
-          <label>Device<select aria-label="Device" disabled={busy || selectedModel?.format !== "pt" || !caps?.cuda} value={effectiveDevice} onChange={(e) => setDevice(e.target.value)}><option value="cpu">CPU</option>{caps?.cuda && selectedModel?.format === "pt" && <option value="0">CUDA:0</option>}</select></label>
-          <label>Image size<select aria-label="Image size" disabled={busy || selectedModel?.format !== "pt"} value={selectedModel?.format !== "pt" ? "metadata" : imgsz} onChange={(e) => setImgsz(Number(e.target.value))}>{selectedModel?.format !== "pt" ? <option value="metadata">Export metadata</option> : [320, 640, 960].map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
+          <label>{s('bitrate')}<input aria-label={s('bitrate')} type="number" min={100} max={20000} step={100} value={bitrate} onChange={(e) => setBitrate(Number(e.target.value))} /></label>
+        </div></fieldset></details>
+        <fieldset><legend>{s('inference')}</legend><div className="stream-input-grid">
+          <label>{s('device')}<select aria-label={s('device')} disabled={busy || selectedModel?.format !== "pt" || !caps?.cuda} value={effectiveDevice} onChange={(e) => setDevice(e.target.value)}><option value="cpu">CPU</option>{caps?.cuda && selectedModel?.format === "pt" && <option value="0">CUDA:0</option>}</select></label>
+          <label>{s('imageSize')}<select aria-label={s('imageSize')} disabled={busy || selectedModel?.format !== "pt"} value={selectedModel?.format !== "pt" ? "metadata" : imgsz} onChange={(e) => setImgsz(Number(e.target.value))}>{selectedModel?.format !== "pt" ? <option value="metadata">{s('metadata')}</option> : [320, 640, 960].map((value) => <option value={value} key={value}>{value}</option>)}</select></label>
         </div>
-          <label className="stream-slider" htmlFor="stream-confidence">Confidence<output htmlFor="stream-confidence">{conf.toFixed(2)}</output><input id="stream-confidence" aria-label="Confidence" type="range" min={0} max={1} step={0.01} value={conf} onChange={(e) => setConf(Number(e.target.value))} /></label>
+          <StreamSwitch label={t('enable')} checked={tracking} disabled={busy} onChange={setTracking}/>
+          <label className="stream-slider" htmlFor="stream-confidence">{s('confidence')}<output htmlFor="stream-confidence">{conf.toFixed(2)}</output><input id="stream-confidence" aria-label={s('confidence')} type="range" min={0} max={1} step={0.01} value={conf} onChange={(e) => setConf(Number(e.target.value))} /></label>
           <label className="stream-slider" htmlFor="stream-iou">IoU<output htmlFor="stream-iou">{postprocess === "NMS-free" || postprocess === "Embedded NMS" ? "N/A" : iou.toFixed(2)}</output><input id="stream-iou" aria-label="IoU" disabled={postprocess === "NMS-free" || postprocess === "Embedded NMS"} type="range" min={0} max={1} step={0.01} value={iou} onChange={(e) => setIou(Number(e.target.value))} /></label>
         </fieldset>
-        <div className="stream-actions"><button type="button" className="primary" disabled={busy || loading || progress !== null || !caps?.available || selectedModel?.available === false || !engine?.available || !modelId || (source === "upload" ? !uploadId : !cameraMode) || fps < 1 || fps > 60 || bitrate < 100 || bitrate > 20000} onClick={start}><Play size={17} />Start</button>
-          <button type="button" className="secondary" disabled={!busy && !cliActive} onClick={stop}><Square size={17} />Stop</button></div>
+
       </div>
       <div className="stream-monitor">
-        <div className="stream-video"><video ref={videoRef} muted autoPlay playsInline controls aria-label="Detection stream" style={{ visibility: cliActive ? "hidden" : "visible" }} />
-          {cliActive && cliFrame && <img className="stream-cli-frame" src={cliFrame} alt="Terminal detection stream" />}
-          {cliActive && !cliFrame && <div className="stream-video-state"><Film size={36} /><span>Terminal</span></div>}
-          {state === "Idle" || state === "Ready" || state === "Stopped" || state === "Connecting" || state === "Failed" ? <div className="stream-video-state"><Film size={36} /><span>{state}</span>{state === "Ready" && <small>{source === "upload" ? upload?.name : camera?.label}</small>}</div> : null}
+        <div className="stream-actions"><button type="button" className="primary" disabled={busy || loading || (schemaError && schemaId!=='model') || progress !== null || !caps?.available || selectedModel?.available === false || !engine?.available || !modelId || (source === "upload" ? !uploadId : !cameraMode) || fps < 1 || fps > 60 || bitrate < 100 || bitrate > 20000} onClick={() => void start()}><Play size={17} />{s('start')}</button>
+          <button type="button" className="secondary" disabled={!busy && !cliActive} onClick={stop}><Square size={17} />{s('stop')}</button></div>
+        <div className="stream-video"><video ref={videoRef} muted playsInline aria-label={s('detectionStream')} style={{ visibility: cliActive ? "hidden" : "visible" }} />
+          <StreamTrackingOverlay video={videoRef} frames={trackingFrames} selected={selectedTrack} onSelect={selectTrack} onTime={updateTime} viz={trackingViz} language={language} active={!cliActive && (state === "Live" || state === "Completed")} />
+          {cliActive && cliFrame && <img className="stream-cli-frame" src={cliFrame} alt={s('terminalStream')} />}
+          {cliActive && !cliFrame && <div className="stream-video-state"><Film size={36} /><span>{s('Terminal')}</span></div>}
+          {state === "Idle" || state === "Ready" || state === "Stopped" || state === "Connecting" || state === "Failed" ? <div className="stream-video-state"><Film size={36} /><span>{s(state as StreamUiKey)}</span>{state === "Ready" && <small>{source === "upload" ? upload?.name : camera?.label}</small>}</div> : null}
         </div>
-        <div className="stream-monitor-bar"><span role="status">{state}</span><span>{cliActive ? "Terminal" : `${postprocess} · H.264 · ${bitrate} kbps`}</span><button type="button" className="secondary" title="Fullscreen" aria-label="Fullscreen" onClick={() => void videoRef.current?.parentElement?.requestFullscreen().catch((reason) => setError(String(reason)))}><Maximize size={16} /></button></div>
-        <dl className="stream-stats"><div><dt>Measured FPS</dt><dd>{stats.fps}</dd></div><div><dt>Inference</dt><dd>{stats.inference_ms} ms</dd></div><div><dt>Detections</dt><dd>{stats.detections}</dd></div><div><dt>Frames</dt><dd>{stats.frames}</dd></div></dl>
-        <details className="stream-code" open><summary><Code size={17} />CLI verification</summary>
-          <div className="stream-code-bar"><span>Python · utils · {selectedModel?.format.toUpperCase()}</span><button type="button" className="secondary" title={copied ? "Copied" : "Copy Python command"} aria-label="Copy Python command" disabled={!command} onClick={() => void copyCommand()}>{copied ? <Check size={16} /> : <Copy size={16} />}</button></div>
-          <textarea ref={commandRef} aria-label="Python verification command" readOnly rows={6} value={command} spellCheck={false} />
+        {!cliActive && <div className="stream-playback">
+          {source === "upload" ? <>
+            <label htmlFor="stream-timeline">{s('playback')} · {(seekDraft ?? position).toFixed(1)} / {(upload?.duration ?? 0).toFixed(1)} s</label>
+            <input id="stream-timeline" aria-label={s('timeline')} type="range" min={0} max={upload?.duration || 1} step={.1}
+              disabled={!upload || upload.duration <= 0 || !selectedModel || selectedModel.available === false || !caps?.available || state === "Connecting" || loading}
+              value={seekDraft ?? Math.min(position, upload?.duration ?? 0)}
+              onChange={(event) => setSeekDraft(Number(event.target.value))}
+              onPointerUp={(event) => seek(Number(event.currentTarget.value))}
+              onKeyUp={(event) => { if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(event.key)) seek(Number(event.currentTarget.value)); }} />
+            <div className="stream-playback-actions">
+              <button type="button" className="secondary" disabled={state !== "Live" && state !== "Completed"} onClick={togglePause}>{paused ? s('resume') : s('pause')}</button>
+              <button type="button" className="secondary" disabled={!upload || !modelId || state === "Connecting" || loading} onClick={() => seek(0)}>{s('replay')}</button>
+              <label>{s('time')}<input aria-label={s('playbackTime')} type="number" min={0} max={upload?.duration ?? 0} step={.1} value={jumpTime} onChange={(event) => setJumpTime(Number(event.target.value))} /></label>
+              <button type="button" className="secondary" disabled={!upload || !modelId || !Number.isFinite(jumpTime) || jumpTime < 0 || jumpTime >= (upload?.duration ?? 0) || state === "Connecting" || loading} onClick={() => seek(jumpTime)}>{s('go')}</button>
+            </div>
+            <small>{t('seekReset')}</small>
+          </> : <small>{s('liveHint')}</small>}
+          {tracking && <div className="stream-target-actions"><span>{selectedTrack ? `${t('selected')} #${selectedTrack}` : t('selectHint')}</span><button type="button" className="secondary" disabled={!selectedTrack} onClick={() => selectTrack(null)}>{t('clear')}</button></div>}
+        </div>}
+        <div className="stream-monitor-bar"><span role="status">{s(state as StreamUiKey)}</span><span>{cliActive ? s('Terminal') : `${postprocess} · H.264 · ${bitrate} kbps`}</span><button type="button" className="secondary" title={s('fullscreen')} aria-label={s('fullscreen')} onClick={() => void videoRef.current?.parentElement?.requestFullscreen().catch((reason) => setError(String(reason)))}><Maximize size={16} /></button></div>
+        <dl className="stream-stats"><div><dt>{s('measuredFPS')}</dt><dd>{stats.fps}</dd></div><div><dt>{s('inference')}</dt><dd>{stats.inference_ms} ms</dd></div><div><dt>{s('detections')}</dt><dd>{stats.detections}</dd></div><div><dt>{s('frames')}</dt><dd>{stats.frames}</dd></div></dl>
+        <TrackingSettingsPanel settings={trackingSettings} onChange={setTrackingSettings} busy={busy} viz={trackingViz} onViz={setTrackingViz} fps={fps} language={language}/>
+        {modelMode === "conversion" && <details className="stream-code"><summary><Code size={17} />{s('cli')}</summary>
+          <div className="stream-code-bar"><span>Python · utils · {selectedModel?.format.toUpperCase()}</span><button type="button" className="secondary" title={copied ? s('copied') : s('copy')} aria-label={s('copy')} disabled={!command} onClick={() => void copyCommand()}>{copied ? <Check size={16} /> : <Copy size={16} />}</button></div>
+          <textarea ref={commandRef} aria-label={s('command')} readOnly rows={6} value={command} spellCheck={false} />
           {commandError && <p className="review-error" role="alert">{commandError}</p>}
-        </details>
+        </details>}
       </div>
     </div>
-    <Suspense fallback={<p role="status">Loading terminal...</p>}><CliWorkspace controlRef={cliControl} onDisplayRequest={prepareCliDisplay} onFrame={(url) => { setCliFrame(url); if (!url) { cliActiveRef.current = false; setCliActive(false); setState("Stopped"); } }} /></Suspense>
+    <Suspense fallback={<p role="status">{s('terminalLoading')}</p>}><CliWorkspace controlRef={cliControl} onDisplayRequest={prepareCliDisplay} onFrame={(url) => { setCliFrame(url); if (!url) { cliActiveRef.current = false; setCliActive(false); setState("Stopped"); } }} /></Suspense>
   </section>;
 }

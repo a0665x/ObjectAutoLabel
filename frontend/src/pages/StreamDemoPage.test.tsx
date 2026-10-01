@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { StreamDemoPage } from "./StreamDemoPage";
 import * as api from "../api/streamDemo";
 
-const player = { append: vi.fn(), end: vi.fn(), dispose: vi.fn() };
+const player = { append: vi.fn(), end: vi.fn(), dispose: vi.fn(), setPaused: vi.fn() };
 vi.mock("./streamPlayer", () => ({ createStreamPlayer: () => player }));
 const cli = vi.hoisted(() => ({ props: null as any }));
 vi.mock("./CliWorkspace", () => ({ CliWorkspace: (props: any) => { cli.props = props; return null; } }));
@@ -34,11 +34,38 @@ beforeEach(() => {
   cli.props = null;
   vi.spyOn(api, "streamRequest").mockImplementation(async (path) => {
     if (path.endsWith("capabilities")) return capabilities as never;
+    if (path.endsWith('class-schemas')) return [{id:'schema1',name:'Project labels',classes:[{class_id:0,class_name:'pedestrian',descriptors:['person']}]}] as never;
     if (path.endsWith("models")) return models as never;
+    if (path.endsWith("inspect-model")) return { id: "external::test", format: "tflite", layout: "NHWC", input_shape: [1,640,640,3], coordinates: "pixels", available: true } as never;
     if (path.endsWith("verify-command")) return { command: "python -c 'print(123)'" } as never;
     return [{ id: "video", name: "clip.mp4", fps: 15, width: 640, height: 360, duration: 5 }] as never;
   });
   vi.stubGlobal("WebSocket", FakeSocket);
+});
+
+it('inspects a path and uses its model independently of conversion history', async () => {
+  render(<StreamDemoPage project={project} />);
+  await waitFor(() => expect((screen.getByRole('button', {name:'Start'}) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('radio', {name:'Local model path'}));
+  expect((screen.getByRole('button', {name:'Start'}) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.change(screen.getByLabelText('Model path'), {target:{value:'/app/input_model/old.tflite'}});
+  fireEvent.click(screen.getByRole('button', {name:'Inspect & use model'}));
+  await waitFor(() => expect(screen.getByText(/TFLITE · NHWC/)).toBeTruthy());
+  fireEvent.click(screen.getByRole('button', {name:'Start'}));
+  FakeSocket.instance.onopen?.();
+  expect(JSON.parse(FakeSocket.instance.send.mock.calls[0][0])).toMatchObject({model_id:'external::test',device:'cpu',tracking:true});
+});
+
+it('detects project labels and sends the displayed schema ID to inference',async()=>{
+  const view=render(<StreamDemoPage project={project}/>);
+  await screen.findByText('Project labels · 0: pedestrian');
+  fireEvent.click(screen.getByRole('button',{name:'Start'}));
+  FakeSocket.instance.onopen?.();
+  expect(JSON.parse(FakeSocket.instance.send.mock.calls[0][0]).schema_id).toBe('schema1');
+  view.rerender(<StreamDemoPage project={project} language="zh"/>);
+  expect(screen.getByLabelText('標籤類別設定')).toBeTruthy();
+  expect(screen.getByText('追蹤 · 運動／拓撲')).toBeTruthy();
+  expect((screen.getByLabelText('標籤類別設定') as HTMLSelectElement).disabled).toBe(true);
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
@@ -48,9 +75,31 @@ it("selects a conversion before its format and uses CPU for exported artifacts",
   fireEvent.change(screen.getByLabelText("Model format"), { target: { value: "onnx1" } });
   expect((screen.getByLabelText("Device") as HTMLSelectElement).value).toBe("cpu");
   expect((screen.getByLabelText("Device") as HTMLSelectElement).disabled).toBe(true);
-  fireEvent.change(screen.getByLabelText("Conversion version"), { target: { value: "c2" } });
+  fireEvent.change(screen.getByRole('combobox', {name:'Conversion version'}), { target: { value: "c2" } });
   expect((screen.getByLabelText("Model format") as HTMLSelectElement).value).toBe("tflite2");
   expect(screen.queryByRole("option", { name: "ONNX · ONNX Runtime" })).toBeNull();
+});
+
+it('pauses inference and seeks only after the previous session releases its slot', async () => {
+  render(<StreamDemoPage project={project} />);
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Start' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+  const first = FakeSocket.instance;
+  act(() => { first.onopen?.(); first.onmessage?.({ data: JSON.stringify({ type: 'started' }) }); });
+  expect(JSON.parse(first.send.mock.calls[0][0])).toMatchObject({ tracking: true, start_seconds: 0 });
+  fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
+  expect(player.setPaused).toHaveBeenLastCalledWith(true);
+  expect(first.send).toHaveBeenLastCalledWith(JSON.stringify({ type: 'playback', paused: true }));
+  fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+  expect(player.setPaused).toHaveBeenLastCalledWith(false);
+  fireEvent.change(screen.getByLabelText('Playback time (seconds)'), { target: { value: '3' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Go' }));
+  expect(FakeSocket.instance).toBe(first);
+  expect(first.send).toHaveBeenLastCalledWith(JSON.stringify({ type: 'stop' }));
+  await act(async () => { first.onclose?.(); });
+  expect(FakeSocket.instance).not.toBe(first);
+  FakeSocket.instance.onopen?.();
+  expect(JSON.parse(FakeSocket.instance.send.mock.calls[0][0])).toMatchObject({ start_seconds: 3 });
 });
 
 it("sends selected model and live thresholds, and closes the stream on page exit", async () => {

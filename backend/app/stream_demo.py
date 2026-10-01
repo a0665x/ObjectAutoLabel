@@ -5,6 +5,8 @@ import asyncio
 from fractions import Fraction
 import json
 import importlib
+from functools import lru_cache
+import math
 from pathlib import Path
 import re
 import shutil
@@ -20,9 +22,10 @@ from .model_lineage import conversion_label
 from .repositories import Repository
 from .runtime_safety import disable_ultralytics_autoinstall
 from .stream_verify import predict_frame
+from .tracking_settings import TrackingSettings
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
-MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
+MAX_UPLOAD_BYTES = None  # No application-level size cap; uploads stream to disk.
 MIME = 'video/mp4; codecs="avc1.42c028"'
 PLUGINS = ("filesrc", "decodebin", "videoconvert", "videoscale", "videorate", "rawvideoparse", "x264enc", "h264parse", "mp4mux", "fdsink", "fdsrc", "v4l2src", "jpegdec")
 
@@ -40,6 +43,10 @@ class StreamConfig(BaseModel):
     iou: float = Field(default=0.7, ge=0, le=1)
     imgsz: Literal[320, 640, 960] = 640
     device: Literal["cpu", "0"] = "0"
+    start_seconds: float = Field(default=0, ge=0, allow_inf_nan=False)
+    tracking: bool = True
+    tracking_settings: TrackingSettings = Field(default_factory=TrackingSettings)
+    schema_id: str = Field(default='auto', max_length=100)
 
     @property
     def height(self) -> int:
@@ -53,8 +60,15 @@ class Thresholds(BaseModel):
 
 
 def probe_video(path: Path) -> dict[str, Any]:
+    stat = path.stat()
+    return dict(_probe_video_cached(str(path.resolve()), stat.st_size, stat.st_mtime_ns))
+
+
+@lru_cache(maxsize=256)
+def _probe_video_cached(filename: str, size: int, modified: int) -> dict[str, Any]:
+    path = Path(filename)
     result = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-                             "stream=width,height,avg_frame_rate:format=duration", "-of", "json", str(path)],
+                             "stream=width,height,avg_frame_rate,duration:stream_tags=DURATION:format=duration", "-of", "json", str(path)],
                             capture_output=True, text=True, timeout=15, check=True)
     data = json.loads(result.stdout)
     streams = data.get("streams", [])
@@ -65,8 +79,43 @@ def probe_video(path: Path) -> dict[str, Any]:
         fps = float(Fraction(stream.get("avg_frame_rate", "0/1")))
     except (ValueError, ZeroDivisionError):
         fps = 0
+    duration = 0.
+    duration_source = 'metadata'
+    for candidate in [stream.get('duration'), stream.get('tags', {}).get('DURATION'), data.get('format', {}).get('duration')]:
+        try:
+            value = 0.
+            for part in str(candidate).split(':'):
+                value = value * 60 + float(part)
+            if math.isfinite(value) and value > 0:
+                duration = value
+                break
+        except (TypeError, ValueError):
+            pass
+    if not duration:
+        # Interrupted Matroska recordings often lack header duration. Scan packet
+        # timestamps without decoding 4K frames or modifying the original file.
+        try:
+            packets = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+                '-show_entries', 'packet=pts_time,duration_time', '-of', 'csv=p=0', str(path)],
+                capture_output=True, text=True, timeout=120, check=False)
+            packet_rows = packets.stdout.splitlines()
+        except subprocess.TimeoutExpired:
+            # A partial scan cannot establish full duration; retain start-at-zero.
+            packet_rows = []
+        first, end = math.inf, 0.
+        for row in packet_rows:
+            fields = row.split(',')
+            try:
+                pts = float(fields[0])
+                length = float(fields[1]) if len(fields) > 1 and fields[1] != 'N/A' else (1 / fps if fps > 0 else 0)
+                if math.isfinite(pts) and math.isfinite(length):
+                    first, end = min(first, pts), max(end, pts + max(0, length))
+            except ValueError:
+                continue
+        duration = max(0., end - first) if math.isfinite(first) else 0.
+        duration_source = 'packets' if duration else 'unknown'
     return {"width": stream["width"], "height": stream["height"], "fps": round(fps, 3),
-            "duration": float(data.get("format", {}).get("duration", 0))}
+            "duration": duration, 'duration_source': duration_source}
 
 
 def upload_dir(repo: Repository, project_id: str) -> Path:
@@ -93,8 +142,10 @@ def list_uploads(repo: Repository, project_id: str) -> list[dict[str, Any]]:
         try:
             item = json.loads(meta.read_text())
             resolve_upload(repo, project_id, item["id"])
+            if not item.get('duration'):
+                item.update(probe_video(resolve_upload(repo, project_id, item['id'])))
             items.append(item)
-        except (ValueError, KeyError, OSError):
+        except (ValueError, KeyError, OSError, subprocess.SubprocessError):
             continue
     return items
 
@@ -102,7 +153,6 @@ def list_uploads(repo: Repository, project_id: str) -> list[dict[str, Any]]:
 def inspect_tflite_input(path: Path, *, imgsz: int = 640, layout: str = "NCHW") -> dict[str, Any]:
     """Read the LiteRT input contract before exposing an artifact to inference."""
     expected_layout = layout.upper()
-    expected = (1, 3, imgsz, imgsz) if expected_layout == "NCHW" else (1, imgsz, imgsz, 3)
     try:
         if path.stat().st_size < 1024:
             raise ValueError("artifact is too small to be a valid LiteRT flatbuffer")
@@ -110,17 +160,10 @@ def inspect_tflite_input(path: Path, *, imgsz: int = 640, layout: str = "NCHW") 
 
         interpreter = Interpreter(model_path=str(path))
         details = interpreter.get_input_details()
-        if not details:
-            raise ValueError("model has no input tensor")
+        from .litert_contract import input_contract
+        actual_layout, _ = input_contract(details)
         shape = tuple(int(value) for value in details[0]["shape"])
-        if shape != expected:
-            return {
-                "input_shape": list(shape),
-                "layout": expected_layout,
-                "available": False,
-                "reason": f"LiteRT input shape {shape} does not match {expected_layout} batch-1 contract {expected}",
-            }
-        return {"input_shape": list(shape), "layout": expected_layout, "available": True, "reason": None}
+        return {"input_shape": list(shape), "layout": actual_layout, "available": True, "reason": None}
     except Exception as exc:  # noqa: BLE001 - surface the artifact-specific reason in the selector
         return {"input_shape": None, "layout": expected_layout, "available": False,
                 "reason": f"LiteRT input inspection failed: {exc}"}
@@ -131,7 +174,7 @@ def list_models(repo: Repository, project_id: str) -> list[dict[str, Any]]:
     for conversion in repo.list_model_conversion_runs(project_id):
         if conversion["status"] != "completed":
             continue
-        group = {"conversion_id": conversion["id"], "conversion_label": conversion_label(repo, conversion)}
+        group = {"conversion_id": conversion["id"], "conversion_label": conversion_label(repo, conversion), 'schema_id': conversion.get('schema_id')}
         native = Path(conversion["source_model_path"])
         if native.is_file():
             models.append({**group, "id": f"native::{conversion['id']}", "path": str(native), "format": "pt", "label": "PT · PyTorch"})
@@ -147,7 +190,7 @@ def list_models(repo: Repository, project_id: str) -> list[dict[str, Any]]:
                 models.append({**group, "id": f"artifact::{artifact['id']}", "path": artifact["output_path"],
                                "format": artifact["format"], "layout": contract["layout"], "input_shape": contract["input_shape"],
                                "available": contract["available"], "reason": contract["reason"],
-                               "label": f"{artifact['format'].upper()} {artifact['precision'].upper()} · {engine}{shape}"})
+                               "label": f"{artifact['format'].upper()} {artifact['precision'].upper()} · {engine} · {contract['layout']}{shape}"})
     roots = [repo.paths.output_model_dir.resolve()]
     roots.extend(repo.project_output_model_dir(project).resolve() for project in repo.list_projects())
     return [item for item in models if any(Path(item["path"]).resolve().is_relative_to(root) for root in roots)]
@@ -178,6 +221,8 @@ def parse_camera_modes(output: str) -> list[dict[str, Any]]:
 
 def capabilities() -> dict[str, Any]:
     missing = []
+    if not shutil.which('ffmpeg'):
+        missing.append('ffmpeg')
     for plugin in PLUGINS:
         if not shutil.which("gst-inspect-1.0"):
             missing.append(plugin)
@@ -210,6 +255,14 @@ def capabilities() -> dict[str, Any]:
 
 
 def decode_command(config: StreamConfig, source: Path, mode: dict[str, Any] | None) -> list[str]:
+    if config.source == "upload":
+        # Accurate input seeking decodes/discards from the preceding keyframe.
+        # Keep aspect ratio and pad exactly as the camera/GStreamer path does.
+        return ["ffmpeg", "-nostdin", "-v", "error", "-ss", str(config.start_seconds),
+                "-i", str(source), "-an", "-sn", "-vf",
+                f"fps={config.fps},scale={config.width}:{config.height}:force_original_aspect_ratio=decrease,"
+                f"pad={config.width}:{config.height}:(ow-iw)/2:(oh-ih)/2,setsar=1",
+                "-pix_fmt", "bgr24", "-f", "rawvideo", "pipe:1"]
     command = ["gst-launch-1.0", "-q"]
     if mode:
         rate = Fraction(mode["fps"]).limit_denominator(1001)
@@ -235,12 +288,20 @@ class StreamSession:
     def __init__(self, config: StreamConfig, model_path: str, source: Path, camera_mode: dict[str, Any] | None = None):
         self.config = config
         self.model_path = model_path
+        self.external_coordinates = None
+        self.label_names = None
         self.source = source
         self.camera_mode = camera_mode
         self.processes: list[asyncio.subprocess.Process] = []
         self.tasks: list[asyncio.Task] = []
         self.errors: list[str] = []
         self.stats: dict[str, Any] = {"frames": 0, "detections": 0, "inference_ms": 0, "fps": 0}
+        self.tracker = None
+        self.identity = None
+        self.selection_requests = []
+        self.objects: list[dict[str, Any]] = []
+        self.playing = asyncio.Event()
+        self.playing.set()
 
     async def spawn(self, command: list[str]) -> asyncio.subprocess.Process:
         process = await asyncio.create_subprocess_exec(*command, stdin=asyncio.subprocess.PIPE,
@@ -254,9 +315,26 @@ class StreamSession:
         return process
 
     def predict(self, model: Any, frame: np.ndarray) -> np.ndarray:
-        result, mode = predict_frame(model, frame, conf=self.config.conf, iou=self.config.iou,
+        result, mode = predict_frame(model, frame, conf=min(.1, self.config.conf) if self.config.tracking else self.config.conf, iou=self.config.iou,
                                      imgsz=self.config.imgsz, device=self.config.device)
         self.stats["postprocess"] = mode
+        from .stream_labels import apply_stream_labels
+        apply_stream_labels(result, self.label_names)
+        if self.config.tracking:
+            if self.tracker is None:
+                from .stream_tracking import StreamTracker
+                self.tracker = StreamTracker(self.config.fps, self.config.tracking_settings)
+                from .stream_identity import IdentityTracker
+                self.identity = IdentityTracker(self.config.tracking_settings, self.config.width, self.config.height)
+            while self.selection_requests:
+                identity, media_time = self.selection_requests.pop(0)
+                self.identity.select(identity, media_time)
+            self.objects = self.tracker.update(result, self.config.conf)
+            self.stats["detections"] = len(self.objects)
+            self.objects = self.identity.update(self.objects, self.stats['frames'] / self.config.fps)
+            # Interactive boxes are drawn at the matching playback timestamp in
+            # the browser, so a paused or delayed frame cannot select a future ID.
+            return frame
         boxes = result.boxes
         self.stats["detections"] = len(boxes) if boxes is not None else 0
         if boxes is not None:
@@ -270,14 +348,19 @@ class StreamSession:
     async def run(self, websocket: Any) -> None:
         disable_ultralytics_autoinstall()
         from ultralytics import YOLO
-        model = await asyncio.to_thread(YOLO, self.model_path, task="detect")
+        if self.external_coordinates is not None:
+            from .stream_models import load_external_model
+            model = await asyncio.to_thread(load_external_model, Path(self.model_path), self.external_coordinates)
+        else:
+            model = await asyncio.to_thread(YOLO, self.model_path, task="detect")
         decoder = await self.spawn(decode_command(self.config, self.source, self.camera_mode))
         encoder = await self.spawn(encode_command(self.config))
-        await websocket.send_json({"type": "started", "mime": MIME})
+        await websocket.send_json({"type": "started", "mime": MIME, "start_seconds": self.config.start_seconds})
 
         async def infer():
             began = time.monotonic()
             while True:
+                await self.playing.wait()
                 try:
                     raw = await asyncio.wait_for(decoder.stdout.readexactly(self.config.width * self.config.height * 3), 20)
                 except asyncio.IncompleteReadError as exc:
@@ -291,13 +374,18 @@ class StreamSession:
                 frame = np.frombuffer(raw, np.uint8).reshape(self.config.height, self.config.width, 3).copy()
                 start = time.monotonic()
                 frame = await asyncio.to_thread(self.predict, model, frame)
+                await websocket.send_json({"type": "tracks", "time": self.stats["frames"] / self.config.fps,
+                                           "objects": self.objects, "width": self.config.width, "height": self.config.height,
+                                           "identity": self.identity.debug if self.identity else {},
+                                           "dt_ms": 1000 / self.config.fps})
                 self.stats.update(frames=self.stats["frames"] + 1, inference_ms=round((time.monotonic() - start) * 1000, 1))
                 self.stats["fps"] = round(self.stats["frames"] / max(0.001, time.monotonic() - began), 1)
                 encoder.stdin.write(frame.tobytes())
                 await asyncio.wait_for(encoder.stdin.drain(), 15)
+                await asyncio.sleep(max(0, 1 / self.config.fps - (time.monotonic() - start)))
 
         async def send():
-            while data := await asyncio.wait_for(encoder.stdout.read(65536), 45):
+            while data := await encoder.stdout.read(65536):
                 await asyncio.wait_for(websocket.send_bytes(data), 15)
                 await websocket.send_json({"type": "stats", **self.stats})
             if await encoder.wait():
@@ -309,6 +397,21 @@ class StreamSession:
                 message = await websocket.receive_json()
                 if message.get("type") == "stop":
                     return
+                if message.get("type") == "playback":
+                    if type(message.get("paused")) is not bool:
+                        raise ValueError("Playback paused must be a boolean")
+                    if self.config.source != "upload":
+                        raise ValueError("Pause is only available for uploaded video")
+                    self.playing.clear() if message["paused"] else self.playing.set()
+                    continue
+                if message.get('type') == 'select_track':
+                    identity, media_time = message.get('id'), message.get('time')
+                    if identity is not None and (not isinstance(identity, str) or len(identity)>80):
+                        raise ValueError('Invalid selected track ID')
+                    if not isinstance(media_time, (int,float)) or not math.isfinite(media_time) or media_time<0:
+                        raise ValueError('Invalid selected frame timestamp')
+                    self.selection_requests[:] = [(identity,float(media_time))]
+                    continue
                 values = Thresholds.model_validate(message.get("thresholds", {}))
                 self.config.conf, self.config.iou = values.conf, values.iou
 
@@ -329,7 +432,10 @@ class StreamSession:
         await asyncio.gather(*self.tasks, return_exceptions=True)
         for process in self.processes:
             try:
-                await asyncio.wait_for(process.wait(), 3)
+                # A seekable file decoder can fill stdout ahead of inference.
+                # Drain pipes after cancellation; wait() alone can deadlock on
+                # a full asyncio pipe even after the child has been terminated.
+                await asyncio.wait_for(process.communicate(), 3)
             except asyncio.TimeoutError:
                 process.kill()
-                await process.wait()
+                await asyncio.wait_for(process.communicate(), 3)

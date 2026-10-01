@@ -56,6 +56,7 @@ output_model/*
 *.engine
 
 # Local secrets and environment
+.aws
 .env
 .env.*
 !.env.example

@@ -118,18 +118,17 @@ def load_detector(path: str, *, conf=.25, iou=.7, imgsz=640, device="cpu") -> De
         raise ValueError("conf and iou must be between 0 and 1")
     if model.suffix == ".tflite":
         from ai_edge_litert.interpreter import Interpreter
+        from backend.app.litert_contract import input_contract
         interpreter = Interpreter(model_path=str(model))
         details = interpreter.get_input_details()
-        shape = tuple(int(value) for value in details[0]["shape"]) if details else ()
-        expected = {(1, imgsz, imgsz, 3), (1, 3, imgsz, imgsz)}
-        if shape not in expected:
-            expected_text = " or ".join(str(item) for item in sorted(expected))
-            raise ValueError(f"LiteRT input shape mismatch: expected batch-1 NHWC/NCHW {expected_text}, got {shape}; re-export the artifact with batch=1")
+        _, imgsz = input_contract(details)
     predictor = DetectionPredictor(overrides={"model": str(model), "task": "detect", "device": device,
                                               "conf": conf, "iou": iou, "imgsz": imgsz, "max_det": 300, "verbose": False})
     predictor.setup_model(model=str(model), verbose=False)
     predictor.source_type = SourceTypes(from_img=True)
     backend = predictor.model
+    from backend.app.litert_contract import prepare_litert_backend
+    prepare_litert_backend(backend)
     size = getattr(backend, "imgsz", imgsz) if model.suffix not in {".pt", ".pth"} else imgsz
     predictor.imgsz = check_imgsz(size, stride=backend.stride, min_dim=2)
     metadata = getattr(backend, "metadata", {}) or {}

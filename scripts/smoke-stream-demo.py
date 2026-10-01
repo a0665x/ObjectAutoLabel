@@ -35,6 +35,16 @@ async def main():
             writer.write(frame)
         writer.release()
         for model in args.model:
+            if args.require_detections:
+                from ultralytics import YOLO
+                from backend.app.stream_verify import predict_frame
+                detector = YOLO(model, task="detect")
+                result, _ = predict_frame(detector, frame, conf=.1, iou=.7, imgsz=640,
+                                          device="0" if Path(model).suffix == ".pt" else "cpu")
+                boxes = result.boxes.xyxy.cpu().numpy()
+                assert len(boxes) and np.any(np.all(boxes[:, 2:] > boxes[:, :2], axis=1)), (
+                    f"{model}: no drawable boxes (coordinate decoding may have collapsed them)")
+                del detector
             output = root / (Path(model).suffix[1:] + ".mp4")
             messages = []
             with output.open("wb") as handle:

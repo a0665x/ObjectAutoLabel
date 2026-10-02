@@ -1,3 +1,4 @@
+import {useUiText} from '../../uiText';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Copy, Focus, Trash2 } from "lucide-react";
@@ -31,6 +32,7 @@ export function AnnotationContextMenu({
   onZoom,
   onClose
 }: AnnotationContextMenuProps) {
+  const ui = useUiText();
   const menuRef = useRef<HTMLDivElement | null>(null);
   const restoreFocusRef = useRef<HTMLElement | SVGElement | null>(null);
   const [position, setPosition] = useState(point);
@@ -123,19 +125,19 @@ export function AnnotationContextMenu({
       ref={menuRef}
       className="review-context-menu"
       role="menu"
-      aria-label="Annotation actions"
+      aria-label={ui("Annotation actions")}
       style={{ left: position.x, top: position.y }}
       onContextMenu={(event) => event.preventDefault()}
       onKeyDown={handleMenuKeyDown}
     >
-      <strong>{selected.length} box{selected.length === 1 ? "" : "es"} selected</strong>
+      <strong>{ui(selected.length === 1 ? "{count} box selected" : "{count} boxes selected", {count:selected.length})}</strong>
       <div className="context-menu-metadata">
-        <span>{classNames.size === 1 ? `Class ${selected[0].class_name}` : "Mixed classes"}</span>
-        {single?.confidence != null ? <span>Confidence {(single.confidence * 100).toFixed(1)}%</span> : null}
-        {single ? <span>Source {single.source_type}</span> : null}
-        {single?.source_descriptor ? <span>Descriptor {single.source_descriptor}</span> : null}
+        <span>{classNames.size === 1 ? ui("Class {v0}", {v0: selected[0].class_name}) : ui("Mixed classes")}</span>
+        {single?.confidence != null ? <span>{ui("Confidence")} {(single.confidence * 100).toFixed(1)}%</span> : null}
+        {single ? <span>{ui("Source")} {ui(single.source_type)}</span> : null}
+        {single?.source_descriptor ? <span>{ui("Descriptor")} {single.source_descriptor}</span> : null}
       </div>
-      <strong>Change class</strong>
+      <strong>{ui("Change class")}</strong>
       <div className="context-menu-classes">
         {classes.map((item, index) => (
           <button
@@ -146,23 +148,23 @@ export function AnnotationContextMenu({
             onClick={() => onRelabelClass(item)}
           >
             <span>ID {item.class_id} · {item.class_name}{classNames.size === 1 && selected[0].class_id === item.class_id ? " ✓" : ""}</span>
-            {index < 9 ? <kbd>Key {index + 1}</kbd> : null}
+            {index < 9 ? <kbd>{ui("Key")} {index + 1}</kbd> : null}
           </button>
         ))}
       </div>
-      <button type="button" role="menuitem" aria-label="Duplicate selected" disabled={!commands.duplicate.enabled} onClick={() => void commands.duplicate.run()}>
-        <Copy size={15} /><span>{commands.duplicate.label}</span>{commands.duplicate.shortcut ? <kbd>{commands.duplicate.shortcut}</kbd> : null}
+      <button type="button" role="menuitem" aria-label={ui("Duplicate selected")} disabled={!commands.duplicate.enabled} onClick={() => void commands.duplicate.run()}>
+        <Copy size={15} /><span>{ui(commands.duplicate.label)}</span>{commands.duplicate.shortcut ? <kbd>{commands.duplicate.shortcut}</kbd> : null}
       </button>
-      <button type="button" role="menuitem" onClick={onZoom}><Focus size={15} />Zoom to selection</button>
+      <button type="button" role="menuitem" onClick={onZoom}><Focus size={15} />{ui("Zoom to selection")}</button>
       <button
         type="button"
         role="menuitem"
-        aria-label="Delete selected"
+        aria-label={ui("Delete selected")}
         className={commands.delete.danger ? "danger" : undefined}
         disabled={!commands.delete.enabled}
         onClick={() => void commands.delete.run()}
       >
-        <Trash2 size={15} /><span>{commands.delete.label}</span>{commands.delete.shortcut ? <kbd>{commands.delete.shortcut}</kbd> : null}
+        <Trash2 size={15} /><span>{ui(commands.delete.label)}</span>{commands.delete.shortcut ? <kbd>{commands.delete.shortcut}</kbd> : null}
       </button>
     </div>,
     document.body

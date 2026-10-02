@@ -1,3 +1,4 @@
+import {useUiText} from '../uiText';
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, LoaderCircle } from "lucide-react";
 
@@ -126,6 +127,7 @@ function annotationsMatch(left: Annotation[], right: Annotation[]): boolean {
 }
 
 export function ReviewPage({ project, t, onDirtyChange, initialFilters }: ReviewPageProps) {
+  const ui = useUiText();
   const [sources, setSources] = useState<SourceAsset[]>([]);
   const [openDataImport, setOpenDataImport] = useState<OpenDataImport | null>(null);
   const [classes, setClasses] = useState<ClassItem[]>([]);
@@ -627,11 +629,11 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
 
   const handleMergeSameClass = useCallback(() => {
     if (removalBusyRef.current) return;
-    const value = window.prompt("Merge same-class boxes with IoU >=", "0.75");
+    const value = window.prompt(ui("Merge same-class boxes with IoU >="), "0.75");
     if (value === null) return;
     const threshold = Number(value);
     if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
-      window.alert("Merge IoU threshold must be a number from 0 to 1.");
+      window.alert(ui("Merge IoU threshold must be a number from 0 to 1."));
       return;
     }
     if (!image) return;
@@ -640,7 +642,7 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
       annotationReducer(annotations, { type: "mergeSameClass", iouThreshold: threshold })
     );
     updateSelectedAnnotations([], null);
-  }, [annotations, image, replaceAnnotationsWithoutHistory, updateSelectedAnnotations]);
+  }, [annotations, image, replaceAnnotationsWithoutHistory, updateSelectedAnnotations, ui]);
 
   const persistAnnotations = useCallback(async (advanceToNext = false) => {
     if (removalBusyRef.current || !image) return;
@@ -746,7 +748,7 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
     }
   }, [annotations, changeReviewStatus, filters, image, images, project.id, refreshStats, resetAnnotationHistory, reviewStatus, selectActiveImage, updateLiveAnnotations]);
 
-  const confirmReviewNavigation = useCallback(() => shouldProceedWithReviewNavigation(dirty, window.confirm), [dirty]);
+  const confirmReviewNavigation = useCallback(() => shouldProceedWithReviewNavigation(dirty, message => window.confirm(ui(message))), [dirty, ui]);
 
   const navigateToIndex = useCallback(
     (nextIndex: number) => {
@@ -952,9 +954,9 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
 
   const removeCurrentImage = useCallback(async () => {
     if (!image || readyImageIdRef.current !== image.id || removalBusyRef.current || saving) return;
-    if (!window.confirm(REMOVE_IMAGE_CONFIRMATION)) return;
+    if (!window.confirm(ui(REMOVE_IMAGE_CONFIRMATION))) return;
     await performImageRemoval(image);
-  }, [image, performImageRemoval, saving]);
+  }, [image, performImageRemoval, saving, ui]);
 
   const restoreHistoryEntry = useCallback((entry: Extract<ReviewHistoryEntry, { kind: "annotations" }>, nextAnnotations: Annotation[]) => {
     const otherAnnotations = nextAnnotations === entry.before ? entry.after : entry.before;
@@ -1185,7 +1187,7 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
         {error && (
           <div className="review-error" role="alert">
             <AlertCircle size={16} />
-            <span>{error}</span>
+            <span>{ui(error)}</span>
           </div>
         )}
 
@@ -1194,14 +1196,14 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
             <div>
               <strong>{image?.path ?? t("review")}</strong>
               <p className="muted">
-                {loadingAnnotations ? "Loading annotations..." : "B: draw · Right-click a box to change class · Ctrl/Cmd+S: save"}
+                {loadingAnnotations ? ui("Loading annotations...") : ui("B: draw · Right-click a box to change class · Ctrl/Cmd+S: save")}
               </p>
             </div>
             {loadingAnnotations && <LoaderCircle className="spin" size={18} />}
           </div>
           {image ? (
             <div className={`review-canvas-shell ${loadingAnnotations ? "is-loading" : ""}`}>
-              {loadingAnnotations && <div className="review-loading-overlay"><LoaderCircle className="spin" size={18} />Loading fresh boxes…</div>}
+              {loadingAnnotations && <div className="review-loading-overlay"><LoaderCircle className="spin" size={18} />{ui("Loading fresh boxes…")}</div>}
               <AnnotationCanvas
                 key={image.id}
                 image={image}
@@ -1242,8 +1244,8 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
             </div>
           ) : (
             <div className="review-empty">
-              <strong>No image selected</strong>
-              <span>Adjust the queue filters or pick an image to begin reviewing.</span>
+              <strong>{ui("No image selected")}</strong>
+              <span>{ui("Adjust the queue filters or pick an image to begin reviewing.")}</span>
             </div>
           )}
         </section>

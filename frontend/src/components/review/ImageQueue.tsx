@@ -1,3 +1,4 @@
+import {useUiText} from '../../uiText';
 import type { ImageFilters, ReviewStats } from "../../api/client";
 import type { OpenDataImport, ProjectImage, SourceAsset } from "../../types";
 
@@ -29,19 +30,20 @@ const LABELS: Record<SourceGroup, string> = { pseudo: "Pseudo Label images", aug
 export function imageSourceGroup(image: ProjectImage): SourceGroup { return image.source_origin === "open_data" ? "open_data" : image.augmentation_run_id ? "augment" : "pseudo"; }
 
 export function ImageQueue({ images, activeImageId, filters, stats, sourceCounts = { pseudo: 0, augment: 0, open_data: 0 }, openDataImport, loading, prefetching = false, onSelectImage, onFilterChange }: ImageQueueProps) {
+  const ui = useUiText();
   const selected = filters.source_groups ?? ["pseudo", "augment", "open_data"];
   const levels = confidenceLevels(images);
   const toggle = (group: SourceGroup) => { const next = selected.includes(group) ? selected.filter((item) => item !== group) : [...selected, group]; if (next.length) onFilterChange({ source_groups: next }); };
   return <section className="panel review-wide-section image-map-panel">
-    <strong>Image map</strong>
-    <p className="muted">{images.length} selected images{prefetching ? " · preloading next boxes" : ""}</p>
-    <p className="muted">Cell color is relative risk within this selection.</p>
-    <div className="source-composition" role="group" aria-label="Dataset composition">
-      {(["pseudo", "augment", "open_data"] as SourceGroup[]).map((group) => <button type="button" key={group} aria-pressed={group === "open_data" && !openDataImport ? false : selected.includes(group)} disabled={group === "open_data" && !openDataImport} onClick={() => toggle(group)}><span>{LABELS[group]}</span><strong>{sourceCounts[group]}</strong></button>)}
+    <strong>{ui("Image map")}</strong>
+    <p className="muted">{images.length} {ui("selected images")}{prefetching ? ui(" · preloading next boxes") : ""}</p>
+    <p className="muted">{ui("Cell color is relative risk within this selection.")}</p>
+    <div className="source-composition" role="group" aria-label={ui("Dataset composition")}>
+      {(["pseudo", "augment", "open_data"] as SourceGroup[]).map((group) => <button type="button" key={group} aria-pressed={group === "open_data" && !openDataImport ? false : selected.includes(group)} disabled={group === "open_data" && !openDataImport} onClick={() => toggle(group)}><span>{ui(LABELS[group])}</span><strong>{sourceCounts[group]}</strong></button>)}
     </div>
-    <div className="confidence-legend"><span>Needs attention</span>{[1,2,3,4,5].map((level) => <i key={level} className={`confidence-cell confidence-${level}`} />)}<span>Most consistent</span></div>
-    <p className="muted">Ranking combines mean/min confidence, box spread, low-confidence ratio and box count. Gray has no model confidence.</p>
-    {loading && <p className="muted">Loading queue...</p>}{prefetching && !loading && <p className="inline-feedback">Preloading next image boxes…</p>}{!loading && images.length === 0 && <p className="muted">No images in the selected sources.</p>}
-    <div className="confidence-grid" role="group" aria-label="Image confidence map">{images.map((image,index) => { const mean = image.mean_confidence == null ? "No model confidence" : `Mean ${(image.mean_confidence*100).toFixed(1)}%`; return <button key={image.id} type="button" className={`confidence-cell confidence-${levels.get(image.id) ?? 0}${image.id===activeImageId?" is-active":""}`} aria-label={`Image ${index+1} · ${LABELS[imageSourceGroup(image)]} · ${mean}`} aria-pressed={image.id===activeImageId} title={`Image ${index+1} · ${mean} · ${image.annotation_count ?? 0} boxes`} onClick={() => onSelectImage(image.id)} />; })}</div>
+    <div className="confidence-legend"><span>{ui("Needs attention")}</span>{[1,2,3,4,5].map((level) => <i key={level} className={`confidence-cell confidence-${level}`} />)}<span>{ui("Most consistent")}</span></div>
+    <p className="muted">{ui("Ranking combines mean/min confidence, box spread, low-confidence ratio and box count. Gray has no model confidence.")}</p>
+    {loading && <p className="muted">{ui("Loading queue...")}</p>}{prefetching && !loading && <p className="inline-feedback">{ui("Preloading next image boxes…")}</p>}{!loading && images.length === 0 && <p className="muted">{ui("No images in the selected sources.")}</p>}
+    <div className="confidence-grid" role="group" aria-label={ui("Image confidence map")}>{images.map((image,index) => { const mean = image.mean_confidence == null ? ui("No model confidence") : ui("Mean {value}%", {value:(image.mean_confidence*100).toFixed(1)}); return <button key={image.id} type="button" className={`confidence-cell confidence-${levels.get(image.id) ?? 0}${image.id===activeImageId?" is-active":""}`} aria-label={ui("Image {v0} · {v1} · {v2}", {v0: index+1, v1: ui(LABELS[imageSourceGroup(image)]), v2: mean})} aria-pressed={image.id===activeImageId} title={ui("Image {v0} · {v1} · {v2} boxes", {v0: index+1, v1: mean, v2: image.annotation_count ?? 0})} onClick={() => onSelectImage(image.id)} />; })}</div>
   </section>;
 }

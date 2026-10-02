@@ -1,3 +1,4 @@
+import {useUiText} from '../uiText';
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -9,6 +10,7 @@ type TerminalControl = { interrupt: () => Promise<void>; grant: (ticket: string)
 type Props = { controlRef: MutableRefObject<CliControl | null>; onDisplayRequest: () => Promise<void>; onFrame: (url: string) => void };
 
 export function CliWorkspace({ controlRef, onDisplayRequest, onFrame }: Props) {
+  const ui = useUiText();
   const [enabled, setEnabled] = useState(false);
   const [error, setError] = useState("");
   const [tabs, setTabs] = useState<number[]>([]);
@@ -76,13 +78,13 @@ export function CliWorkspace({ controlRef, onDisplayRequest, onFrame }: Props) {
     void update();
     return () => { disposed = true; abort.abort(); window.clearTimeout(timer); if (currentUrl) URL.revokeObjectURL(currentUrl); };
   }, [display]);
-  return <section className="cli-workspace" aria-label="Terminal workspace">
-    <header className="cli-heading"><h3><TerminalSquare size={20} />Terminal</h3><code>/app/cli_workspace</code></header>
+  return <section className="cli-workspace" aria-label={ui("Terminal workspace")}>
+    <header className="cli-heading"><h3><TerminalSquare size={20} />{ui("Terminal")}</h3><code>/app/cli_workspace</code></header>
     {error && <p className="review-error" role="alert">{error}</p>}
-    {!enabled ? <p role="status">CLI disabled. Set OBJECT_AUTOLABEL_CLI_ENABLED=true and recreate the service, then refresh this page.</p> : <>
-      <div className="cli-tabs" role="tablist" aria-label="Terminals">
-        {tabs.map((id) => <div className="cli-tab" key={id}><button type="button" role="tab" aria-selected={selected === id} aria-controls={`terminal-${id}`} onClick={() => setSelected(id)}>Terminal {id}</button><button type="button" title={`Close Terminal ${id}`} aria-label={`Close Terminal ${id}`} onClick={() => void close(id)}><X size={14} /></button></div>)}
-        <button type="button" title="New terminal" aria-label="New terminal" disabled={tabs.length >= 6} onClick={add}><Plus size={17} /></button>
+    {!enabled ? <p role="status">{ui("CLI disabled. Set OBJECT_AUTOLABEL_CLI_ENABLED=true and recreate the service, then refresh this page.")}</p> : <>
+      <div className="cli-tabs" role="tablist" aria-label={ui("Terminals")}>
+        {tabs.map((id) => <div className="cli-tab" key={id}><button type="button" role="tab" aria-selected={selected === id} aria-controls={`terminal-${id}`} onClick={() => setSelected(id)}>{ui("Terminal")} {id}</button><button type="button" title={ui("Close Terminal {v0}", {v0: id})} aria-label={ui("Close Terminal {v0}", {v0: id})} onClick={() => void close(id)}><X size={14} /></button></div>)}
+        <button type="button" title={ui("New terminal")} aria-label={ui("New terminal")} disabled={tabs.length >= 6} onClick={add}><Plus size={17} /></button>
       </div>
       {tabs.map((id) => <TerminalSheet key={id} id={id} active={selected === id} register={(control) => { if (control) terminals.current.set(id, control); else terminals.current.delete(id); }} onRequest={(ticket) => void requestDisplay(id, ticket)} onError={setError} />)}
     </>}
@@ -90,6 +92,7 @@ export function CliWorkspace({ controlRef, onDisplayRequest, onFrame }: Props) {
 }
 
 function TerminalSheet({ id, active, register, onRequest, onError }: { id: number; active: boolean; register: (control?: TerminalControl) => void; onRequest: (ticket: string) => void; onError: (message: string) => void }) {
+  const ui = useUiText();
   const element = useRef<HTMLDivElement>(null);
   const fitRef = useRef<(() => void) | undefined>(undefined);
   const callbacks = useRef({ register, onRequest, onError }); callbacks.current = { register, onRequest, onError };
@@ -129,8 +132,8 @@ function TerminalSheet({ id, active, register, onRequest, onError }: { id: numbe
     const input = term.onData((data) => send({ type: "input", data }));
     return () => { closed = true; callbacks.current.register(); if (pending) { window.clearTimeout(pending.timer); pending.resolve(); } socket.close(); observer.disconnect(); input.dispose(); term.dispose(); fitRef.current = undefined; };
   }, [revision]);
-  return <div role="tabpanel" id={`terminal-${id}`} aria-label={`Terminal ${id}`} hidden={!active}>
-    <div className="cli-terminal-bar"><span role="status">{state}</span><button type="button" title="Reconnect terminal" aria-label="Reconnect terminal" disabled={state === "Connected" || state === "Connecting"} onClick={() => setRevision((value) => value + 1)}><RefreshCw size={16} /></button></div>
-    <div className="cli-terminal" ref={element} aria-label={`Docker terminal ${id}`} />
+  return <div role="tabpanel" id={`terminal-${id}`} aria-label={ui("Terminal {v0}", {v0: id})} hidden={!active}>
+    <div className="cli-terminal-bar"><span role="status">{ui(state)}</span><button type="button" title={ui("Reconnect terminal")} aria-label={ui("Reconnect terminal")} disabled={state === "Connected" || state === "Connecting"} onClick={() => setRevision((value) => value + 1)}><RefreshCw size={16} /></button></div>
+    <div className="cli-terminal" ref={element} aria-label={ui("Docker terminal {v0}", {v0: id})} />
   </div>;
 }

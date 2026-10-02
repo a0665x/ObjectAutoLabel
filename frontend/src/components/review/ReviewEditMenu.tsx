@@ -1,3 +1,4 @@
+import {useUiText} from '../../uiText';
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown } from "lucide-react";
@@ -19,6 +20,7 @@ const GROUPS: Array<{ id: ReviewCommand["group"]; label: string }> = [
 ];
 
 export function ReviewEditMenu({ commands, open, onOpenChange }: ReviewEditMenuProps) {
+  const ui = useUiText();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -118,7 +120,7 @@ export function ReviewEditMenu({ commands, open, onOpenChange }: ReviewEditMenuP
         aria-expanded={isOpen}
         onClick={() => (isOpen ? closeMenu() : setOpen(true))}
       >
-        <span>Edit</span>
+        <span>{ui("Edit")}</span>
         <ChevronDown size={14} />
       </button>
       {isOpen ? createPortal(
@@ -126,7 +128,7 @@ export function ReviewEditMenu({ commands, open, onOpenChange }: ReviewEditMenuP
           ref={menuRef}
           className="review-edit-menu"
           role="menu"
-          aria-label="Edit commands"
+          aria-label={ui("Edit commands")}
           tabIndex={-1}
           style={menuPosition}
           onKeyDown={handleMenuKeyDown}
@@ -136,7 +138,7 @@ export function ReviewEditMenu({ commands, open, onOpenChange }: ReviewEditMenuP
             if (!items.length) return null;
             return (
               <section key={group.id} className="review-edit-menu-group">
-                <h3>{group.label}</h3>
+                <h3>{ui(group.label)}</h3>
                 {items.map((command) => (
                   <button
                     key={command.id}
@@ -153,7 +155,7 @@ export function ReviewEditMenu({ commands, open, onOpenChange }: ReviewEditMenuP
                   >
                     <span className="review-edit-command-label">
                       {command.checked ? <Check size={14} aria-hidden="true" /> : null}
-                      {command.label}
+                      {ui(command.label)}
                     </span>
                     {command.shortcut ? <kbd>{command.shortcut}</kbd> : null}
                   </button>

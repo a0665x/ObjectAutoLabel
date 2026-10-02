@@ -1,3 +1,4 @@
+import {useUiText} from '../../uiText';
 import type { CSSProperties } from "react";
 import type { BboxHistogramBin, BboxHistogramClass } from "../../api/client";
 import type { Annotation } from "../../types";
@@ -29,13 +30,12 @@ type Props = {
 };
 
 export function AnnotationHistogram({ annotations, distribution, loading, activeBin, onSelectBin }: Props) {
+  const ui = useUiText();
   return (
     <section className="panel review-wide-section annotation-histogram-panel">
-      <strong>Object size distribution</strong>
-      <p className="muted">
-        All boxes in the selected source groups. Dense ranges split automatically. Gold bins contain boxes from the current image; click a bin to highlight those boxes.
-      </p>
-      {loading ? <p className="muted">Loading distribution…</p> : distribution.length === 0 ? <p className="muted">No boxes in the selected sources.</p> : distribution.map((row) => {
+      <strong>{ui("Object size distribution")}</strong>
+      <p className="muted"> {ui("All boxes in the selected source groups. Dense ranges split automatically. Gold bins contain boxes from the current image; click a bin to highlight those boxes.")} </p>
+      {loading ? <p className="muted">{ui("Loading distribution…")}</p> : distribution.length === 0 ? <p className="muted">{ui("No boxes in the selected sources.")}</p> : distribution.map((row) => {
         const currentBins = new Set(
           row.bins
             .filter((bin) => annotations.some((box) => box.class_id === row.class_id && belongsToBin(areaPercent(box), bin)))
@@ -45,7 +45,7 @@ export function AnnotationHistogram({ annotations, distribution, loading, active
         const columns = { "--histogram-columns": row.bins.length } as CSSProperties;
         return (
           <div key={row.class_id} className="area-histogram">
-            <strong>{row.class_name} · {row.bins.reduce((sum, bin) => sum + bin.count, 0)} boxes</strong>
+            <strong>{row.class_name} · {row.bins.reduce((sum, bin) => sum + bin.count, 0)} {ui("boxes")}</strong>
             <div className="histogram-bars" style={columns}>
               {row.bins.map((bin) => {
                 const key = `${bin.lower}:${bin.upper}`;
@@ -57,7 +57,7 @@ export function AnnotationHistogram({ annotations, distribution, loading, active
                     key={key}
                     className={`${containsCurrent ? "contains-current " : ""}${isActive ? "is-active" : ""}`}
                     aria-pressed={isActive}
-                    aria-label={`${formatBoundary(bin.lower)} to ${formatBoundary(bin.upper)} percent, ${bin.count} boxes${containsCurrent ? ", current image" : ""}`}
+                    aria-label={ui("{v0} to {v1} percent, {v2} boxes{v3}", {v0: formatBoundary(bin.lower), v1: formatBoundary(bin.upper), v2: bin.count, v3: containsCurrent ? ", current image" : ""})}
                     onClick={() => onSelectBin(row.class_id, bin)}
                   >
                     <span className="histogram-bar" style={{ height: `${Math.max(3, Math.sqrt(bin.count / max) * 88)}px` }} />

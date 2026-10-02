@@ -15,19 +15,33 @@ its detailed history is collapsed beneath Saved Splits.
 Split's composition board accepts one Pseudo source, one optional Augment
 built from that source, and one optional Open Data version. Augment replaces
 the raw Pseudo image set; it is not added a second time. Open Data is additive
-and keeps upstream train/validation membership. Drag modules into their typed
-slots, or use the equivalent keyboard/touch buttons. Modules show names,
+and keeps upstream train/validation membership. Select versions directly with
+keyboard/touch buttons in an interactive processing flow. Modules show names,
 counts, timestamps and processing settings. Selecting Augment supplies its
 recorded Pseudo parent; changing Pseudo clears a previously selected Augment.
 
 The Split page follows **select source cards → set ratios → build**. Only the
 current project's Pseudo/Augment/Open Data versions appear here, not every
-workflow stage. Cards show a name, image count and date, with settings collapsed
-under Details; each source column initially shows three versions plus its
-selection, with Show all for older outputs. Blue/Purple/Teal accents connect
-cards, source slots and the owning navigation tabs. Selection uses a check mark
-as well as color. Linking an Augment briefly highlights affected slots; reduced
-motion disables the movement. Source selection supports keyboard/touch and drag.
+workflow stage. The compact Pseudo → Augment + Open Data → Split diagram shows
+the current version/count at each node. A hover or keyboard-focus preview fans
+up to two other versions like a card deck; it never changes selection. Click/tap
+opens that step's color-matched picker (three versions plus the selection, Show
+all for older outputs). Names, counts and dates remain visible in the picker,
+with settings under Details. Blue/Purple/Teal accents connect
+cards and the owning navigation tabs. Selection uses a check mark as well as
+color. There is no duplicate Compose/drag-slot area: source cards are the only
+version selectors. The final Split node shows an approximate count that does not
+double-add the Pseudo source and takes the user to ratios without submitting a
+build. Picker-header removal
+also works when a selected source has disappeared. Saved combinations is an
+optional, initially collapsed disclosure.
+Only one picker opens at a time. Pointer leave retracts the deck preview but
+does not dismiss an explicitly opened picker; the same node, close button,
+Escape or an outside click dismisses it. Selecting/removing a version collapses
+it and returns focus to its node. Focus follows a newly opened picker so it is
+reachable on small screens. Mobile uses a vertical flow with rotated arrows.
+Short transform/opacity transitions use no animation dependency or continuous
+animation and are disabled under prefers-reduced-motion.
 The Task Center is docked below this page rather than floating over source cards.
 
 Selecting a source or a saved combination changes a provider-owned draft only.
@@ -47,6 +61,17 @@ Open Data highlights that import's history. Inspection never assigns the source
 or overwrites generation settings or the active Open Data mapping. Back to Split
 returns to the preserved draft. Missing/deleted sources show an unavailable
 message and are not silently replaced by a newer version.
+
+Split content and the shared version inspector follow the application's English,
+Traditional Chinese, Japanese or Korean selection via `WorkflowProvider.language`.
+`workflow/text.ts` owns these messages. Feedback stores message keys/parameters,
+not already-translated text, so language changes update existing notices without
+resetting the draft. Version names, paths, class names and model identifiers are
+preserved. Known source failures are translated; unknown server diagnostics stay
+verbatim under localized Technical details. Ratio help is expandable on touch as
+well as desktop. Shared lineage, sample labels, version settings and Split deletion
+confirmation are localized too. This does not claim full translation of every
+generation form or application-wide navigation/status component.
 
 Saved Splits provides **Use this Split in Train** to assign the selected completed
 Split and open Train, without starting a training job. Train and downstream model selectors
@@ -102,8 +127,11 @@ recipe validation, assignment invalidation, recipe-only deletion, API errors,
 and historical annotation snapshots consumed by Split and pass-through Augment.
 `frontend/src/workflow/WorkflowState.test.tsx` covers parent synchronization,
 exact draft-to-Split submission, optional save, saved-recipe reuse, Open Data-only
-null inputs, save failure, typed drag/drop, source navigation and draft retention,
-shared Assign updates and deletion confirmation. Existing lineage, history
+null inputs, save failure, source navigation and draft retention, shared Assign
+updates and deletion confirmation. It also checks localized content/help/errors,
+language changes without resetting selection, source-inspector translations,
+collapsed optional combinations and translated destructive-action confirmations.
+Existing lineage, history
 deletion, API, service and Pseudo tests remain required.
 
 2026-10-01 acceptance: all 278 frontend tests and the production frontend build
@@ -112,3 +140,21 @@ one missing-Authlib dependency failure, not a workflow regression. Headless Chro
 verified source navigation, exact Augment preview selection, draft retention,
 reduced motion and no horizontal overflow at 375/768/1024/1440 px. These browsing
 checks made no composition/assignment/Split writes against the real project.
+
+2026-10-02 acceptance: 289 frontend tests pass, including content-level locale
+coverage (not only sidebar labels), saved-history confirmation, invalid ratios,
+and preservation of original version names. Headless Chrome verified the four
+languages, source-version navigation, retained selections, keyboard activation
+and 375/768/1024/1440 px layouts without data-changing requests. Production
+frontend compilation also remains required before publishing static assets.
+
+Interactive-flow coverage additionally checks click/keyboard disclosure, Escape
+and focus restoration, pointer-leave versus outside-click behavior, locked and
+unavailable versions, linked-node updates, non-duplicated totals and navigation
+to ratios without building. Hover/fan transforms, touch, reduced motion and
+responsive layout require a real-browser check.
+2026-10-02 flow acceptance: all 292 frontend tests and the production build pass.
+Headless Chrome verified four languages, hover enter/leave, click toggling,
+keyboard/Escape and focus return, touch selection with an onscreen picker,
+source-tab round trips, ratio navigation, reduced motion, 200% root text size,
+and 375/768/1024/1440 px widths. No page errors or data-changing requests occurred.

@@ -1,4 +1,5 @@
 import type { Language } from "./types";
+import {uiText} from './uiText';
 
 type Dictionary = Record<string, string>;
 
@@ -58,7 +59,7 @@ export const dictionaries: Record<Language, Dictionary> = {
     addSource: "新增來源",
     extractFrames: "影片切圖",
     saveSchema: "儲存類別",
-    startPseudo: "生成 Pseudo Labels",
+    startPseudo: "生成自動標註",
     saveAnnotations: "儲存標註",
     buildSplit: "建立資料集切分",
     language: "語言"
@@ -69,7 +70,7 @@ export const dictionaries: Record<Language, Dictionary> = {
     schema: "クラス設定",
     pseudo: "疑似ラベル",
     review: "レビュー",
-    openData: "Open Data",
+    openData: "公開データ",
     split: "分割",
     train: "学習",
     convert: "変換／エクスポート",
@@ -77,10 +78,10 @@ export const dictionaries: Record<Language, Dictionary> = {
     settings: "設定",
     createProject: "作成",
     activeJobs: "ジョブ",
-    worldModels: "World models",
-    inputModels: "Input models",
-    outputModels: "Output models",
-    localFirst: "ローカル dataset workstation",
+    worldModels: "ラベル生成モデル",
+    inputModels: "学習入力モデル",
+    outputModels: "出力モデル",
+    localFirst: "ローカルデータセット作業領域",
     newProjectName: "新規プロジェクト名",
     description: "説明",
     imageFolder: "画像フォルダ",
@@ -90,7 +91,7 @@ export const dictionaries: Record<Language, Dictionary> = {
     saveSchema: "保存",
     startPseudo: "疑似ラベル生成",
     saveAnnotations: "保存",
-    buildSplit: "Dataset 分割",
+    buildSplit: "データセットを分割",
     language: "言語"
   },
   ko: {
@@ -99,7 +100,7 @@ export const dictionaries: Record<Language, Dictionary> = {
     schema: "클래스 설정",
     pseudo: "의사 라벨",
     review: "검토",
-    openData: "Open Data",
+    openData: "공개 데이터",
     split: "분할",
     train: "학습",
     convert: "변환 / 내보내기",
@@ -107,10 +108,10 @@ export const dictionaries: Record<Language, Dictionary> = {
     settings: "설정",
     createProject: "생성",
     activeJobs: "작업 상태",
-    worldModels: "World models",
-    inputModels: "Input models",
-    outputModels: "Output models",
-    localFirst: "로컬 dataset workstation",
+    worldModels: "라벨 생성 모델",
+    inputModels: "학습 입력 모델",
+    outputModels: "출력 모델",
+    localFirst: "로컬 데이터셋 작업 공간",
     newProjectName: "새 프로젝트 이름",
     description: "설명",
     imageFolder: "이미지 폴더",
@@ -120,11 +121,11 @@ export const dictionaries: Record<Language, Dictionary> = {
     saveSchema: "저장",
     startPseudo: "의사 라벨 생성",
     saveAnnotations: "저장",
-    buildSplit: "Dataset 분할",
+    buildSplit: "데이터셋 분할",
     language: "언어"
   }
 };
 
 export function translate(language: Language, key: string): string {
-  return dictionaries[language][key] ?? dictionaries.en[key] ?? key;
+  return dictionaries[language][key] ?? dictionaries.en[key] ?? uiText(language)(key);
 }

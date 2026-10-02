@@ -1,3 +1,4 @@
+import {useUiText} from '../../uiText';
 import type { Annotation, ClassItem } from "../../types";
 
 type ClassPaletteProps = {
@@ -15,13 +16,14 @@ function colorForClass(classId: number): string {
 }
 
 export function ClassPalette({ classes, selectedClassId, selectedAnnotation, disabled = false, onSelectClass }: ClassPaletteProps) {
+  const ui = useUiText();
   return (
     <section className="panel class-palette" aria-busy={disabled}>
       <div className="sidebar-header">
         <div>
-          <strong>Class palette</strong>
+          <strong>{ui("Class palette")}</strong>
           <p className="muted">
-            {selectedAnnotation ? "Selecting a class relabels the active box." : "Choose the class used for new boxes."}
+            {selectedAnnotation ? ui("Selecting a class relabels the active box.") : ui("Choose the class used for new boxes.")}
           </p>
         </div>
       </div>
@@ -40,12 +42,12 @@ export function ClassPalette({ classes, selectedClassId, selectedAnnotation, dis
               <span className="class-swatch" style={{ background: colorForClass(item.class_id) }} />
               <span className="class-chip-label">
                 <strong>{item.class_name}</strong>
-                <span>{hotkey ? `Key ${hotkey}` : `Class ${item.class_id}`}</span>
+                <span>{hotkey ? ui("Key {v0}", {v0: hotkey}) : ui("Class {v0}", {v0: item.class_id})}</span>
               </span>
             </button>
           );
         })}
-        {classes.length === 0 && <p className="muted">No classes loaded. Save a class schema to start annotating.</p>}
+        {classes.length === 0 && <p className="muted">{ui("No classes loaded. Save a class schema to start annotating.")}</p>}
       </div>
     </section>
   );

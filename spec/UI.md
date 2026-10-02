@@ -27,6 +27,23 @@ When OAuth authentication is enabled, the application opens on a provider choose
 
 ## Interaction Model
 
+### Interface language
+
+- `App` owns the current EN / Traditional Chinese / Japanese / Korean language.
+  `UiLanguageProvider` in `frontend/src/uiText.tsx` distributes it to page content,
+  shared controls, tooltips, review portals and dialogs without remounting forms.
+- Translate UI-owned copy at render time with `useUiText()` and the three-language
+  tuples in `uiMessages.ts`. The existing navigation dictionary delegates missing
+  keys to this catalog; existing Split and Stream catalogs remain supported.
+- Keep backend enum values, form option values, CSS status classes, effect dependencies,
+  project/version/schema/class names, descriptors, paths and raw diagnostics unchanged.
+  Store dynamic notices as a message key plus interpolation values, not already
+  translated strings, so visible notices can change language too.
+- `localization.test.tsx` covers live language switching, retained edits, portal menus,
+  delete confirmation, unchanged option/status values and catalog coverage. New UI copy
+  must include all three non-English translations; model/runtime identifiers can remain
+  in their original technical spelling. External tool output is not automatically translated.
+
 Most workflow forms submit one job and receive immediate feedback. The UI polls job status and shows process feedback in two layers: a bottom-right Task Center for active/latest jobs and a top Workflow Guide for missing/done/current/failed step guidance. Project, source, schema, annotation, and model-list interactions are regular request/response calls.
 
 Every active backend job in the Task Center has a `Stop safely` action. Job-backed processing buttons also become stop actions after a job id is available. Cancellation is cooperative: training stops at a batch boundary and file/build jobs stop at their next safe loop or artifact boundary.

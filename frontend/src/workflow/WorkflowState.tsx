@@ -1,6 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../api/client";
 import {assignedRecipe, recipeIssue, sameRecipe, sourcePages} from './composition';
+import type {Language} from '../types';
+import {workflowText} from './text';
+import {uiText} from '../uiText';
 
 export type Stage = "pseudo" | "augmentation" | "open_data" | "split" | "training" | "conversion";
 export type Recipe = { pseudo_label_run_id: string | null; augmentation_run_id: string | null; open_data_import_id: string | null };
@@ -13,11 +16,12 @@ type Runtime = { state: WorkflowState | null; busy: boolean; error: string; relo
   draft:Recipe; setDraft:(draft:Recipe)=>void; saveDraft:(name?:string)=>Promise<Composition>;
   focus:VersionFocus|null; viewVersion:(stage:Stage,id:string)=>void; backToSplit:()=>void;
   useSplitForTraining:(id:string)=>Promise<void>;
+  language:Language;
 };
 const Context = createContext<Runtime | null>(null);
 export const useWorkflow = () => useContext(Context);
 
-export function WorkflowProvider({ projectId, revision, children, onNavigate }: { projectId: string; revision: string; children: ReactNode; onNavigate?:(page:string)=>void }) {
+export function WorkflowProvider({ projectId, revision, children, onNavigate, language='en' }: { projectId: string; revision: string; children: ReactNode; onNavigate?:(page:string)=>void; language?:Language }) {
   const [state, setState] = useState<WorkflowState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -63,30 +67,32 @@ export function WorkflowProvider({ projectId, revision, children, onNavigate }: 
     setFocus(current=>({stage,id,serial:(current?.serial??0)+1}));
     onNavigate?.(sourcePages[stage]);
   }
-  return <Context.Provider value={{ state, busy, error, reload, change, projectId, draft, setDraft:setDraftOverride, saveDraft, focus, viewVersion,
+  return <Context.Provider value={{ state, busy, error, reload, change, projectId, draft, setDraft:setDraftOverride, saveDraft, focus, viewVersion, language,
     backToSplit:()=>{setFocus(null);onNavigate?.('split');},
     useSplitForTraining:async id=>{const next=await change(()=>api.assignWorkflow(projectId,'split',id));if(next)onNavigate?.('train');}
   }}>{children}</Context.Provider>;
 }
 
 export function VersionDetails({ version }: { version: Version }) {
-  return <><span>{version.count.toLocaleString()} images · {version.created_at.slice(0, 16).replace("T", " ")}</span><dl className="version-settings">{Object.entries(version.settings).filter(([, value]) => value != null).map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{typeof value === "object" ? JSON.stringify(value) : String(value)}</dd></div>)}</dl></>;
+  const w=workflowText(useWorkflow()?.language);
+  return <><span>{w('{count} images',{count:version.count.toLocaleString()})} · {version.created_at.slice(0, 16).replace("T", " ")}</span><dl className="version-settings">{Object.entries(version.settings).filter(([, value]) => value != null).map(([key, value]) => <div key={key}><dt title={key}>{w(key.replaceAll("_", " "))}</dt><dd>{typeof value === "object" ? JSON.stringify(value) : typeof value === 'boolean' ? w(String(value)) : String(value)}</dd></div>)}</dl></>;
 }
 
 export function AssignmentFooter({ page, onDeleted }: { page: string; onDeleted: () => Promise<void> }) {
   const runtime = useWorkflow();
+  const ui=uiText(runtime?.language??'en');
   const stage = ({ pseudo: "pseudo", review: "pseudo", augment: "augmentation", "open-data": "open_data", split: "split", train: "training", validate: "training", convert: "conversion", "stream-demo": "conversion" } as Record<string, Stage>)[page];
   if (!runtime || !stage) return null;
   const { state, busy, error, change, projectId } = runtime;
   const versions = state?.catalog[stage] ?? [];
   const selected = state?.assignments[stage];
-  return <section className="panel assignment-footer" aria-label={`${stageNames[stage]} assignment and history`}>
-    <div className="sidebar-header"><div><h2>{stageNames[stage]} · Assign & history</h2><p className="muted">Assign a saved version for downstream tabs. Changing an upstream assignment clears dependent assignments.</p></div><span className="assigned-badge">Assigned: {versions.find(v => v.id === selected)?.name ?? "None"}</span></div>
+  return <section className="panel assignment-footer" aria-label={ui('{stage} assignment and history',{stage:ui(stageNames[stage])})}>
+    <div className="sidebar-header"><div><h2>{ui('{stage} · Assign & history',{stage:ui(stageNames[stage])})}</h2><p className="muted">{ui('Assign a saved version for downstream tabs. Changing an upstream assignment clears dependent assignments.')}</p></div><span className="assigned-badge">{ui('Assigned: {name}',{name:versions.find(v => v.id === selected)?.name ?? ui('None')})}</span></div>
     {error && <p className="review-error" role="alert">{error}</p>}
-    {!state ? <p>Loading project assignments…</p> : !versions.length ? <p className="muted">No saved {stageNames[stage]} versions yet.</p> : <div className="version-library">{versions.map(version => <article key={version.id} className={`version-module ${version.id === selected ? "is-assigned" : ""}`}><header><strong>{version.name}</strong>{version.id === selected && <span className="assigned-badge">Assigned</span>}</header><VersionDetails version={version} />{version.reason && <p className="review-error">{version.reason}</p>}<footer className="inline-actions"><button type="button" className="secondary action-assign" disabled={busy || Boolean(version.reason)} onClick={() => void change(() => api.assignWorkflow(projectId, stage, version.id))}>Assign {stageNames[stage]}</button><button type="button" className="secondary danger action-delete" disabled={busy} aria-label={`Delete saved ${stage} ${version.name}`} onClick={() => {
-      if (!window.confirm(`Delete ${stageNames[stage]} “${version.name}” and all dependent build, training and export history? Raw inputs and shared caches are preserved.`)) return;
+    {!state ? <p>{ui('Loading project assignments…')}</p> : !versions.length ? <p className="muted">{ui('No saved {stage} versions yet.',{stage:ui(stageNames[stage])})}</p> : <div className="version-library">{versions.map(version => <article key={version.id} className={`version-module ${version.id === selected ? "is-assigned" : ""}`}><header><strong>{version.name}</strong>{version.id === selected && <span className="assigned-badge">{ui('Assigned')}</span>}</header><VersionDetails version={version} />{version.reason && <p className="review-error">{version.reason}</p>}<footer className="inline-actions"><button type="button" className="secondary action-assign" disabled={busy || Boolean(version.reason)} onClick={() => void change(() => api.assignWorkflow(projectId, stage, version.id))}>{ui('Assign {stage}',{stage:ui(stageNames[stage])})}</button><button type="button" className="secondary danger action-delete" disabled={busy} aria-label={ui('Delete saved {stage} {name}',{stage:ui(stage),name:version.name})} onClick={() => {
+      if (!window.confirm(ui('Delete {stage} “{name}” and all dependent build, training and export history? Raw inputs and shared caches are preserved.',{stage:ui(stageNames[stage]),name:version.name}))) return;
       void change(async () => { await api.deleteHistory(projectId, stage, version.id); await onDeleted(); return api.workflowState(projectId); });
-    }}>Delete</button></footer></article>)}</div>}
-    {selected && <button type="button" className="secondary" disabled={busy} onClick={() => void change(() => api.assignWorkflow(projectId, stage, null))}>Clear assignment</button>}
+    }}>{ui('Delete')}</button></footer></article>)}</div>}
+    {selected && <button type="button" className="secondary" disabled={busy} onClick={() => void change(() => api.assignWorkflow(projectId, stage, null))}>{ui('Clear assignment')}</button>}
   </section>;
 }

@@ -1,3 +1,4 @@
+import {useUiText} from '../../uiText';
 import { Trash2 } from "lucide-react";
 
 import type { Annotation, ClassItem, ProjectImage } from "../../types";
@@ -40,54 +41,53 @@ export function AnnotationInspector({
   onSave,
   onSaveAndNext
 }: AnnotationInspectorProps) {
+  const ui = useUiText();
   const selectedAnnotation = annotations.find((item) => item.id === selectedId) ?? null;
 
   return (
     <aside className="panel review-sidebar-section" aria-busy={locked}>
       <div className="sidebar-header">
         <div>
-          <strong>{image ? fileName(image.path) : "No image selected"}</strong>
-          <p className="muted">{image?.path ?? "Pick an image from the queue to start reviewing."}</p>
+          <strong>{image ? fileName(image.path) : ui("No image selected")}</strong>
+          <p className="muted">{image?.path ?? ui("Pick an image from the queue to start reviewing.")}</p>
         </div>
-        <span className={dirty ? "dirty-flag is-dirty" : "dirty-flag"}>{dirty ? "Dirty" : "Synced"}</span>
+        <span className={dirty ? "dirty-flag is-dirty" : "dirty-flag"}>{dirty ? ui("Dirty") : ui("Synced")}</span>
       </div>
 
       <div className="sidebar-field">
         <button type="button" className="primary" onClick={onSave} disabled={!image || saving || locked}>
-          {busyLabel ?? (saving ? "Saving..." : "Save annotations")}
+          {ui(busyLabel ?? (saving ? "Saving..." : "Save annotations"))}
         </button>
-        <button type="button" className="secondary" onClick={onSaveAndNext} disabled={!image || saving || locked}>
-          Save & next (N)
-        </button>
+        <button type="button" className="secondary" onClick={onSaveAndNext} disabled={!image || saving || locked}> {ui("Save & next (N)")} </button>
       </div>
 
       <div className="inspector-meta">
-        <span>{annotations.length} annotations</span>
-        <span>{loading ? "Loading..." : "Ready"}</span>
+        <span>{annotations.length} {ui("annotations")}</span>
+        <span>{loading ? ui("Loading...") : ui("Ready")}</span>
       </div>
 
       {selectedAnnotation && (
         <div className="sidebar-field">
-          <strong>Selected annotation</strong>
+          <strong>{ui("Selected annotation")}</strong>
           <div className="inspector-details">
-            <span>Confidence</span>
+            <span>{ui("Confidence")}</span>
             <strong>
               {selectedAnnotation.confidence === null || selectedAnnotation.confidence === undefined
-                ? "N/A"
+                ? ui("N/A")
                 : `${(selectedAnnotation.confidence * 100).toFixed(1)}%`}
             </strong>
-            <span>Source descriptor</span>
-            <strong>{selectedAnnotation.source_descriptor || "N/A"}</strong>
-            <span>Source type</span>
-            <strong>{selectedAnnotation.source_type}</strong>
-            <span>Edited</span>
-            <strong>{selectedAnnotation.edited ? "Yes" : "No"}</strong>
+            <span>{ui("Source descriptor")}</span>
+            <strong>{selectedAnnotation.source_descriptor || ui("N/A")}</strong>
+            <span>{ui("Source type")}</span>
+            <strong>{ui(selectedAnnotation.source_type)}</strong>
+            <span>{ui("Edited")}</span>
+            <strong>{selectedAnnotation.edited ? ui("Yes") : ui("No")}</strong>
           </div>
         </div>
       )}
 
       <div className="annotation-list">
-        {annotations.length === 0 && <p className="muted">No annotations on this image yet.</p>}
+        {annotations.length === 0 && <p className="muted">{ui("No annotations on this image yet.")}</p>}
         {annotations.map((annotation, index) => {
           const isSelected = annotation.id === selectedId;
           return (
@@ -117,7 +117,7 @@ export function AnnotationInspector({
                   className="icon-danger"
                   disabled={locked}
                   onClick={() => onDelete(annotation.id)}
-                  title="Delete annotation"
+                  title={ui("Delete annotation")}
                 >
                   <Trash2 size={16} />
                 </button>

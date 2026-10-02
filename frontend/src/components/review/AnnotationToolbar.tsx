@@ -1,3 +1,4 @@
+import {useUiText} from '../../uiText';
 import { ChevronLeft, ChevronRight, Hand, LocateFixed, Maximize2, Save, Scan, SkipForward, SquarePen, ZoomIn, ZoomOut } from "lucide-react";
 
 import type { ReviewImagePosition } from "../../types";
@@ -53,6 +54,7 @@ export function AnnotationToolbar({
   onZoomIn,
   onZoomOut
 }: AnnotationToolbarProps) {
+  const ui = useUiText();
   const command = (id: string) => commands?.find((item) => item.id === id);
   const selectCommand = command("tool-select");
   const drawCommand = command("tool-draw");
@@ -78,22 +80,22 @@ export function AnnotationToolbar({
     <section className="review-toolbar panel" aria-busy={locked}>
       <div className="toolbar-primary-row">
         <div className="toolbar-cluster toolbar-view-group">
-          <button type="button" className="icon-button action-navigate" onClick={onPrevious} disabled={!canGoPrev} title="Previous image (ArrowLeft)">
+          <button type="button" className="icon-button action-navigate" onClick={onPrevious} disabled={!canGoPrev} title={ui("Previous image (ArrowLeft)")}>
             <ChevronLeft size={18} />
           </button>
-          <button type="button" className="icon-button action-navigate" onClick={onNext} disabled={!canGoNext} title="Next image (ArrowRight)">
+          <button type="button" className="icon-button action-navigate" onClick={onNext} disabled={!canGoNext} title={ui("Next image (ArrowRight)")}>
             <ChevronRight size={18} />
           </button>
-          <div className="toolbar-cluster toolbar-zoom" aria-label="Image zoom controls">
-            <button type="button" className="icon-button" onClick={onZoomOut} title="Zoom out"><ZoomOut size={16} /></button>
-            <button type="button" className="secondary zoom-readout" onClick={onActualSize} title="Show image at 100%"><Scan size={16} /><span>{Math.round(zoom * 100)}%</span></button>
-            <button type="button" className="icon-button" onClick={onZoomIn} title="Zoom in"><ZoomIn size={16} /></button>
-            <button type="button" className="secondary" onClick={onFit} title="Fit image in viewport"><Maximize2 size={16} /><span>Fit</span></button>
+          <div className="toolbar-cluster toolbar-zoom" aria-label={ui("Image zoom controls")}>
+            <button type="button" className="icon-button" onClick={onZoomOut} title={ui("Zoom out")}><ZoomOut size={16} /></button>
+            <button type="button" className="secondary zoom-readout" onClick={onActualSize} title={ui("Show image at 100%")}><Scan size={16} /><span>{Math.round(zoom * 100)}%</span></button>
+            <button type="button" className="icon-button" onClick={onZoomIn} title={ui("Zoom in")}><ZoomIn size={16} /></button>
+            <button type="button" className="secondary" onClick={onFit} title={ui("Fit image in viewport")}><Maximize2 size={16} /><span>{ui("Fit")}</span></button>
           </div>
           {position ? (
             <div className="review-image-position" aria-live="polite">
-              <strong>Filtered queue {position.filtered_index} / {position.filtered_total}</strong>
-              <span> · Project total {position.project_index} / {position.project_total}</span>
+              <strong>{ui("Filtered queue")} {position.filtered_index} / {position.filtered_total}</strong>
+              <span> {ui("· Project total")} {position.project_index} / {position.project_total}</span>
             </div>
           ) : null}
         </div>
@@ -101,41 +103,39 @@ export function AnnotationToolbar({
           {commands ? (
             <ReviewEditMenu commands={commands} open={editMenuOpen} onOpenChange={onEditMenuOpenChange} />
           ) : null}
-          <button type="button" className="secondary action-merge" onClick={onMergeSameClass} disabled={locked} title="Merge overlapping boxes on this image when they map to the same training class id. You will be asked for the IoU threshold.">
-            Merge boxes
-          </button>
-          <span className={dirty ? "dirty-flag is-dirty" : "dirty-flag"}>{dirty ? "Unsaved" : "Saved"}</span>
-          <button type="button" className="primary action-save" onClick={() => runSave("save", onSave)} disabled={commandDisabled(saveCommand, saving || locked)} title="Save annotations for this image (Ctrl+S or Cmd+S)">
+          <button type="button" className="secondary action-merge" onClick={onMergeSameClass} disabled={locked} title={ui("Merge overlapping boxes on this image when they map to the same training class id. You will be asked for the IoU threshold.")}> {ui("Merge boxes")} </button>
+          <span className={dirty ? "dirty-flag is-dirty" : "dirty-flag"}>{dirty ? ui("Unsaved") : ui("Saved")}</span>
+          <button type="button" className="primary action-save" onClick={() => runSave("save", onSave)} disabled={commandDisabled(saveCommand, saving || locked)} title={ui("Save annotations for this image (Ctrl+S or Cmd+S)")}>
             <Save size={16} />
-            <span>{busyLabel ?? (saving ? "Saving..." : "Save")}</span>
+            <span>{ui(busyLabel ?? (saving ? "Saving..." : "Save"))}</span>
           </button>
-          <button type="button" className="secondary action-save-next" onClick={() => runSave("save-next", onSaveAndNext)} disabled={commandDisabled(saveNextCommand, saving || locked)} title="Save and move to the next image (N or Shift+S); confidence is the confidence score assigned by YOLO-World">
+          <button type="button" className="secondary action-save-next" onClick={() => runSave("save-next", onSaveAndNext)} disabled={commandDisabled(saveNextCommand, saving || locked)} title={ui("Save and move to the next image (N or Shift+S); confidence is the confidence score assigned by YOLO-World")}>
             <SkipForward size={16} />
-            <span>Save & next</span>
+            <span>{ui("Save & next")}</span>
           </button>
         </div>
       </div>
       <div className="toolbar-secondary-row">
-        <div className="segmented-control toolbar-tool-group" role="tablist" aria-label="Annotation tools">
-          <button type="button" aria-pressed={toolChecked(selectCommand, "select")} disabled={commandDisabled(selectCommand, false)} className={`tool-select ${toolChecked(selectCommand, "select") ? "is-active" : ""}`} onClick={() => runTool("tool-select", "select")} title="Select mode: click an existing box to move, resize, or relabel it (D)">
-            <LocateFixed size={16} /><span>Select</span><kbd>D</kbd>
+        <div className="segmented-control toolbar-tool-group" role="tablist" aria-label={ui("Annotation tools")}>
+          <button type="button" aria-pressed={toolChecked(selectCommand, "select")} disabled={commandDisabled(selectCommand, false)} className={`tool-select ${toolChecked(selectCommand, "select") ? "is-active" : ""}`} onClick={() => runTool("tool-select", "select")} title={ui("Select mode: click an existing box to move, resize, or relabel it (D)")}>
+            <LocateFixed size={16} /><span>{ui("Select")}</span><kbd>{ui("D")}</kbd>
           </button>
-          <button type="button" aria-pressed={toolChecked(drawCommand, "draw")} disabled={commandDisabled(drawCommand, false)} className={`tool-draw ${toolChecked(drawCommand, "draw") ? "is-active" : ""}`} onClick={() => runTool("tool-draw", "draw")} title="Draw mode: drag on the image to create a new box (B)">
-            <SquarePen size={16} /><span>Draw</span><kbd>B</kbd>
+          <button type="button" aria-pressed={toolChecked(drawCommand, "draw")} disabled={commandDisabled(drawCommand, false)} className={`tool-draw ${toolChecked(drawCommand, "draw") ? "is-active" : ""}`} onClick={() => runTool("tool-draw", "draw")} title={ui("Draw mode: drag on the image to create a new box (B)")}>
+            <SquarePen size={16} /><span>{ui("Draw")}</span><kbd>{ui("B")}</kbd>
           </button>
-          <button type="button" aria-pressed={toolChecked(panCommand, "pan")} disabled={commandDisabled(panCommand, false)} className={`tool-pan ${toolChecked(panCommand, "pan") ? "is-active" : ""}`} onClick={() => runTool("tool-pan", "pan")} title="Pan mode: drag the stage without editing boxes (H)">
-            <Hand size={16} /><span>Pan</span><kbd>H</kbd>
+          <button type="button" aria-pressed={toolChecked(panCommand, "pan")} disabled={commandDisabled(panCommand, false)} className={`tool-pan ${toolChecked(panCommand, "pan") ? "is-active" : ""}`} onClick={() => runTool("tool-pan", "pan")} title={ui("Pan mode: drag the stage without editing boxes (H)")}>
+            <Hand size={16} /><span>{ui("Pan")}</span><kbd>{ui("H")}</kbd>
           </button>
         </div>
-        <div className="review-shortcuts" aria-label="Review shortcuts">
-          <span><kbd>Zoomed drag</kbd> pan</span>
-          <span><kbd>Shift+drag</kbd> select boxes</span>
-          <span><kbd>Space+drag</kbd> pan</span>
-          <span><kbd>Middle-drag</kbd> pan</span>
-          <span><kbd>Ctrl+wheel</kbd> zoom</span>
-          <span><kbd>Ctrl+D</kbd> duplicate</span>
-          <span><kbd>Right-click</kbd> actions</span>
-          <span><kbd>Arrow keys</kbd> move · <kbd>Shift</kbd> ×10</span>
+        <div className="review-shortcuts" aria-label={ui("Review shortcuts")}>
+          <span><kbd>{ui("Zoomed drag")}</kbd> {ui("pan")}</span>
+          <span><kbd>{ui("Shift+drag")}</kbd> {ui("select boxes")}</span>
+          <span><kbd>{ui("Space+drag")}</kbd> {ui("pan")}</span>
+          <span><kbd>{ui("Middle-drag")}</kbd> {ui("pan")}</span>
+          <span><kbd>{ui("Ctrl+wheel")}</kbd> {ui("zoom")}</span>
+          <span><kbd>{ui("Ctrl+D")}</kbd> {ui("duplicate")}</span>
+          <span><kbd>{ui("Right-click")}</kbd> {ui("actions")}</span>
+          <span><kbd>{ui("Arrow keys")}</kbd> {ui("move ·")} <kbd>Shift</kbd> ×10</span>
         </div>
       </div>
     </section>

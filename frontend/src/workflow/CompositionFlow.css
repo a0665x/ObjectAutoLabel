@@ -1,0 +1,82 @@
+/* A source is a deck of versions; only deliberate clicks change the recipe. */
+.composition-flow-workspace { container-type: inline-size; min-width: 0; }
+.composition-flow {
+  display: grid; grid-template-columns: minmax(0, 1fr) 28px minmax(0, 1fr) 28px minmax(0, 1fr) 28px minmax(0, 1fr);
+  gap: 8px; align-items: stretch; padding: 40px 10px 10px;
+}
+.composition-board .composition-flow-node {
+  position: relative; isolation: isolate; min-width: 0; padding: 0; border: 0;
+  border-radius: 14px; background: transparent; color: var(--ink); text-align: left;
+  box-shadow: none; touch-action: manipulation; transition: none;
+}
+.composition-flow-face {
+  position: relative; display: flex; flex-direction: column; gap: 10px; height: 100%; min-height: 170px;
+  border: 1px solid color-mix(in srgb, var(--version-accent) 40%, var(--line)); border-top: 3px solid var(--version-accent);
+  border-radius: inherit; padding: 14px; background: var(--panel-solid);
+}
+.composition-flow-node[aria-expanded="true"] .composition-flow-face,
+.composition-flow-node[data-included="true"] .composition-flow-face {
+  background: color-mix(in srgb, var(--version-accent) 6%, var(--panel-solid));
+}
+.composition-flow-node[aria-expanded="true"] .composition-flow-face { outline: 2px solid var(--version-accent); outline-offset: 3px; }
+.composition-flow-label { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 650; }
+.composition-flow-label svg { flex-shrink: 0; }
+.composition-flow-label > svg:first-child { color: var(--version-accent); }
+.composition-flow-label > svg:last-child { margin-left: auto; }
+.composition-flow-face > strong { font-size: 14px; overflow-wrap: anywhere; line-height: 1.5; }
+.composition-flow-value { animation: composition-flow-reveal 220ms ease-out; }
+.composition-flow-meta, .composition-flow-footer { font-size: 12px; color: var(--muted); }
+.composition-flow-footer { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: auto; }
+.composition-flow-footer svg { color: var(--ink); }
+.composition-flow-chevron { transition: transform 200ms ease-out; }
+.composition-flow-node[aria-expanded="true"] .composition-flow-chevron, .composition-close-chevron { transform: rotate(180deg); }
+.composition-stack { position: absolute; inset: 0; pointer-events: none; }
+.composition-stack-back {
+  position: absolute; inset: 0; display: block; border-radius: 14px; border: 1px solid color-mix(in srgb, var(--version-accent) 50%, var(--line));
+  background: color-mix(in srgb, var(--version-accent) 12%, var(--panel-solid)); transform: translateY(-6px) scale(.96);
+  transform-origin: 50% 85%; transition: transform 220ms cubic-bezier(.2,.8,.2,1); padding: 5px 10px;
+}
+.composition-stack-back[data-depth="1"] { transform: translateY(-12px) scale(.92); background: color-mix(in srgb, var(--version-accent) 7%, var(--panel-solid)); }
+.composition-stack-back > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; opacity: 0; transition: opacity 180ms ease-out; }
+.composition-flow-node:focus-visible .composition-stack-back[data-depth="0"] { transform: translate(-4px,-20px) rotate(-4deg) scale(.97); }
+.composition-flow-node:focus-visible .composition-stack-back[data-depth="1"] { transform: translate(4px,-38px) rotate(4deg) scale(.94); }
+.composition-flow-node:focus-visible .composition-stack-back > span { opacity: 1; }
+@media (hover: hover) and (pointer: fine) {
+  .composition-flow-node:not(:disabled):hover .composition-stack-back[data-depth="0"] { transform: translate(-4px,-20px) rotate(-4deg) scale(.97); }
+  .composition-flow-node:not(:disabled):hover .composition-stack-back[data-depth="1"] { transform: translate(4px,-38px) rotate(4deg) scale(.94); }
+  .composition-flow-node:not(:disabled):hover .composition-stack-back > span { opacity: 1; }
+  .composition-flow-node:not(:disabled):hover .composition-flow-face { box-shadow: 0 6px 18px color-mix(in srgb, var(--version-accent) 12%, transparent); }
+}
+.composition-connector { display: flex; align-items: center; justify-content: center; color: var(--muted); animation: composition-flow-reveal 260ms ease-out; }
+.composition-flow-result { --version-accent: var(--button-save); }
+.composition-board .composition-flow-node:disabled { opacity: .55; cursor: not-allowed; }
+.composition-version-panel {
+  margin-top: 14px; padding: 16px; border: 1px solid color-mix(in srgb, var(--version-accent) 40%, var(--line));
+  border-top: 3px solid var(--version-accent); border-radius: 14px; background: color-mix(in srgb, var(--version-accent) 3%, var(--panel-solid));
+  animation: composition-flow-reveal 200ms ease-out; outline-offset: 3px;
+}
+.composition-version-panel > small { display: block; margin: 12px 0; }
+.composition-version-panel:focus { outline: 2px solid var(--version-accent); }
+.composition-version-options { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; max-height: 480px; overflow-y: auto; padding: 4px; }
+.composition-version-panel > button { margin-top: 12px; }
+#split-build-form { scroll-margin-top: 20px; }
+#split-build-form:focus-within { border-color: var(--button-save); }
+@keyframes composition-flow-reveal { from { opacity: .6; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+@container (max-width: 680px) {
+  .composition-flow { grid-template-columns: minmax(0,1fr); padding: 26px 10px 10px; gap: 16px; }
+  .composition-flow-face { min-height: 110px; gap: 6px; }
+  .composition-flow-footer { margin-top: 2px; }
+  .composition-connector { min-height: 24px; }
+  .composition-connector[data-kind="arrow"] svg { transform: rotate(90deg); }
+  .composition-version-options { grid-template-columns: minmax(0,1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composition-flow-workspace *, .composition-flow-workspace *::before { animation: none !important; transition: none !important; }
+  .composition-board .composition-flow-node .composition-stack-back[data-depth="0"] { transform: translateY(-6px) scale(.96); }
+  .composition-board .composition-flow-node .composition-stack-back[data-depth="1"] { transform: translateY(-12px) scale(.92); }
+  .composition-stack-back > span { visibility: hidden; }
+}
+@media (forced-colors: active) {
+  .composition-flow-node[aria-expanded="true"] .composition-flow-face { outline: 3px solid Highlight; }
+  .composition-flow-node[data-included="true"] .composition-flow-face { border-bottom: 3px solid Highlight; }
+}

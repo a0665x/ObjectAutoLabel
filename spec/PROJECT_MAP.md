@@ -19,7 +19,7 @@ ObjectAutoLabel is a Dockerized WebUI for object-detection dataset preparation a
 - [Data Model](DATA_MODEL.md): folders, YAML configs, labels, and model files.
 - [Operations](OPERATIONS.md): common tasks and failure modes.
 - [Testing](TESTING.md): current validation approach and gaps.
-- [Current Status](STATUS.md): recently fixed bugs, active runtime URLs, data-path migration state, and known caveats for the next agent.
+- [Current Status](STATUS.md): current features, validation results, and known limitations.
 
 ## Task Router
 

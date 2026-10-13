@@ -7,7 +7,7 @@ import { AssignmentFooter, WorkflowProvider, type WorkflowState } from "./Workfl
 import { CompositionBoard } from "./CompositionBoard";
 import { VersionInspector } from "./VersionInspector";
 import { SplitPage } from "../App";
-import { chooseVersion, emptyRecipe, recipeIssue } from "./composition";
+import { chooseVersion, emptyRecipe, recipeIssue, sourceBranches } from "./composition";
 import type {Language, DatasetSplitRun} from '../types';
 import {workflowMessages, workflowText} from './text';
 import {WorkflowError} from './WorkflowError';
@@ -83,6 +83,41 @@ it("selecting an augment module brings its parent and saves the exact recipe", a
   fireEvent.change(screen.getByLabelText("Combination name"), { target: { value: "My mix" } });
   fireEvent.click(screen.getByRole("button", { name: "Save combination" }));
   await waitFor(() => expect(save).toHaveBeenCalledWith("p", { name: "My mix", pseudo_label_run_id: "p2", augmentation_run_id: "a1", open_data_import_id: null }));
+});
+
+it('adds parallel source groups through the existing picker and builds their exact union',async()=>{
+  const state=fixture();
+  state.catalog.augmentation.push({id:'a2',name:'First augment',count:30,settings:{},reason:'',created_at:'',parent_id:'p1'});
+  state.catalog.open_data=[{id:'o1',name:'External',count:24,settings:{},reason:'',created_at:''}];
+  state.assignments.open_data='o1';
+  const save=mockSave(state),split=renderSplit(state);
+  await openPicker('augmentation');
+  fireEvent.click(screen.getByRole('button',{name:'Use version · First augment'}));
+  fireEvent.click(screen.getByRole('button',{name:'Add Pseudo → Augment group'}));
+  expect(screen.getByRole('heading',{name:'Pseudo · Source group 2'})).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'Use version · Second'}));
+  fireEvent.click(screen.getByRole('button',{name:'Choose Augment version · Source group 2'}));
+  fireEvent.click(screen.getByRole('button',{name:'Use version · Augmented'}));
+  expect(screen.getByText('Approx. 66 images')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'Build New Split Version'}));
+  await waitFor(()=>expect(save).toHaveBeenCalledWith('p',expect.objectContaining({branches:[{pseudo_label_run_id:'p1',augmentation_run_id:'a2'},{pseudo_label_run_id:'p2',augmentation_run_id:'a1'}],open_data_import_id:'o1'})));
+  await waitFor(()=>expect(split).toHaveBeenCalledWith('p',expect.objectContaining({composition_id:'c1'})));
+});
+
+it('keeps parent linkage local to its group, rejects duplicates and removes an empty group',async()=>{
+  const state=fixture();
+  const draft={...emptyRecipe,pseudo_label_run_id:'p1',branches:[{pseudo_label_run_id:'p1',augmentation_run_id:null},{pseudo_label_run_id:'p2',augmentation_run_id:null}]};
+  const next=chooseVersion(state,draft,'augmentation','a1',1);
+  expect(sourceBranches(next)[0]).toEqual(draft.branches[0]);
+  expect(sourceBranches(next)[1]).toEqual({pseudo_label_run_id:'p2',augmentation_run_id:'a1'});
+  expect(recipeIssue(state,{...draft,branches:[draft.branches[0],draft.branches[0]]})).toMatch('twice');
+  vi.spyOn(api,'workflowState').mockResolvedValue(state);
+  render(<WorkflowProvider projectId="p" revision="1"><CompositionBoard/></WorkflowProvider>);
+  await screen.findByRole('button',{name:'Add Pseudo → Augment group'});
+  fireEvent.click(screen.getByRole('button',{name:'Add Pseudo → Augment group'}));
+  fireEvent.keyDown(document.querySelector('.composition-flow-workspace')!,{key:'Escape'});
+  fireEvent.click(screen.getByRole('button',{name:'Remove source group 2'}));
+  expect(screen.getByRole('button',{name:'Choose Pseudo version'}).textContent).toContain('First');
 });
 it("footer assignment updates the shared state and deletion requires confirmation", async () => {
   const state = fixture();

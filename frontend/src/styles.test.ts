@@ -27,6 +27,7 @@ describe("responsive layout CSS", () => {
 
   it("wraps long active-project names in the responsive top bar", () => {
     expect(css).toMatch(/\.topbar h1\s*\{[^}]*overflow-wrap:\s*anywhere;/m);
+    expect(css).toMatch(/\.top-actions\s*\{[^}]*flex-wrap:\s*wrap;/m);
   });
 
   it("keeps navigation and form controls at 44px touch targets", () => {
@@ -37,6 +38,8 @@ describe("responsive layout CSS", () => {
   });
 
   it("uses the option-C toolbar breakpoint and preserves intrinsic panel actions", () => {
+    expect(css).toMatch(/\.review-toolbar\s*\{[^}]*container-type:\s*inline-size;/m);
+    expect(css).toMatch(/@container \(max-width:\s*540px\)/m);
     expect(css).toMatch(/@media \(max-width:\s*900px\)\s*\{[\s\S]*?\.toolbar-primary-row,\s*\.toolbar-secondary-row\s*\{[^}]*flex-direction:\s*column;/m);
     expect(css).toMatch(/@media \(max-width:\s*480px\)\s*\{[\s\S]*?\.panel\s*>\s*\.intrinsic-action,[\s\S]*?width:\s*100%;/m);
     expect(css).toMatch(/\.panel\s*>\s*\.primary,[\s\S]*?width:\s*fit-content;/m);

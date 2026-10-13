@@ -60,7 +60,11 @@ Each downstream workflow page should expose explicit selectors for upstream arti
 
 Tracked Model source and Conversion selectors use compact names only: `[Pseudo · name] → [Augment · name] + [Open Data · name] → [Split · name] → [Train · name] · best.pt`, followed by `[Convert · name]` where applicable. Dates, ids, image counts, statuses, classes, and hyperparameters belong in adjacent detail cards rather than the option text.
 
-Pseudo, Augment, Split, Training, Conversion, and Export history rows expose a confirmed Delete action. Deletion cascades only downstream, refreshes every affected selector, and is unavailable while a related job is active. Shared Open Data caches, raw inputs, Source assets, and Class schemas are never part of this history action.
+Source, Pseudo, Augment, Split, Training, Conversion, and Export history rows expose a confirmed Delete action. Deletion cascades only downstream and refreshes every affected selector. Source deletion is blocked during any active project job, removes that Source's project-local copy and dependent history, and never removes its original input. Other deletions protect related active jobs and retain Source assets. Shared Open Data caches, raw inputs and Class schemas are never part of this history action.
+
+Repeated Sources `Process & analysis` for the same project/kind/resolved path
+shows a confirmation before copying: cancel to reuse Source history, or confirm
+an intentional new version. Existing duplicates are not automatically deleted.
 
 Every workflow page that creates a downstream artifact should expose a human-readable name before submit. Pseudo, Augment/source, Split, and Train may run multiple times in the same project, and the next page must make those previous builds distinguishable by name plus lineage.
 
@@ -78,6 +82,7 @@ The review workbench is not job-driven. It loads sources, class schemas, queue e
 - Saving replaces the image annotation set and writes a YOLO label file under the project `reviewed_labels/` folder. Legacy review status remains an internal compatibility field and is not part of the Review UI or dirty-state calculation.
 - Select mode supports direct left-drag move/resize. At Fit zoom, empty-background drag creates a multi-box lasso; after zooming beyond Fit, empty-background drag pans and Shift+drag creates the lasso. Selected boxes move together and remain clamped to the natural image bounds.
 - Pan mode uses left-drag. Middle-drag and `Space`+left-drag temporarily pan from any mode without changing the active annotation tool.
+- `Reuse` sits beside Select/Draw/Pan and adds the most recent same-Source/version saved label group, with a nearest-nonempty predecessor fallback, Undo and explicit Save. It remains usable on both empty and partly labeled destinations, even if N removes the saved frame from the filtered queue. Same-class incoming IoU strictly above the default 0.8 (or last Review Merge threshold) preserves the destination box unchanged; different classes/equal-threshold boxes stay eligible. Feedback explains unavailability and reports added/skipped counts. The four actions compact according to the toolbar's own container width, not only the viewport, so the desktop annotation sidebar cannot cause overflow.
 - `Ctrl`+mouse-wheel zooms around the pointer while ordinary wheel input remains available for page scrolling. Zoom is clamped to 25%-800%; the toolbar exposes zoom out, current-percent/100%, zoom in, and Fit controls.
 - Right-clicking any part of a box, including its label, opens a body-portaled, viewport-clamped context menu beside the pointer. It shows source/confidence metadata when available and offers bulk class change, duplicate, zoom-to-selection, and delete actions for the selected set.
 - `D`, `B`, and `H` select the persistent Select/Draw/Pan tools. Holding `Ctrl/Cmd` temporarily swaps Draw and Select for one drag; it is the gesture gate, not a persistent mode shortcut.
@@ -88,6 +93,9 @@ The review workbench is not job-driven. It loads sources, class schemas, queue e
 
 ## Pseudo Label UX Contract
 
+- `Pseudo · Assign & history` is the single run-history/delete surface; do not render the redundant `Previous pseudo-label runs` list. The saved-version inspector and latest-run preview remain available.
+- An opt-in `Automatically filter large boxes` checkbox appears beside merge settings. Replace the former numeric maximum field with one counted histogram and a dual-handle range slider. The log1p area axis expands tiny boxes while showing real area percentages; square-root bar heights expose less frequent bins. Blue is retained, gray is excluded, with text legend and accessible distribution details. Native range handles support dragging, touch and keyboard with 44px targets. Counts at partially selected bins are estimates, explicitly marked `≈`.
+- The initial Auto range keeps zero through the separation before a distinct large-box cluster, recomputed from each new run's post-merge, pre-filter predictions. Require at least three candidates on each side, a gap of at least five percentage points, a large-side median of at least 10%, and a median ratio of at least four; use the largest qualifying gap, otherwise fall back to one third. This is a conservative heuristic, not semantic object validation. Drag either handle to lock a manual inclusive range; `Suggested range` restores Auto. Source changes reset its area draft; asynchronously loaded statistics never overwrite manual choices. History retains the effective bounds, mode and pre-filter histogram. Legacy statistics are labeled retained-only, and first runs do not fabricate a histogram. Old runs are not retroactively filtered.
 - Schema history is explicit: editing a schema creates a draft, and only `Commit schema to history` creates a stored history item. Generate is blocked/disabled until the active draft is committed or an existing committed schema is selected.
 - Pseudo Label Generate must use the visible `Pseudo build name` as the stored run/build name.
 - Existing schemas can be assigned from history. Choosing a history item immediately switches the visible schema name, class ids/names, and descriptor tree.
@@ -158,6 +166,18 @@ The review workbench is not job-driven. It loads sources, class schemas, queue e
 - Train loss visualization is split into three compact charts: Box loss, Class loss, and DFL loss. Each chart includes y-axis loss ticks, x-axis epoch ticks, data points, and a regression/trend line.
 
 ## Shared workflow assignments
+
+Source history provides Assign Source/Assigned and Clear assignment, with raw
+source image count, path and version identity. Pseudo begins with the matching
+Source version selector and input summary. New registration never silently
+changes the selection, and Generate stays disabled until a ready Source is
+assigned. Source assignment updates do not reset the schema or model settings.
+
+Review's Pseudo and Augment Image Map groups follow their respective tab's Assign
+selection. Split keeps its existing source cards and adds an `Add Pseudo → Augment
+group` action: each parallel row has independent linked version pickers, while
+all rows share one Open Data card and one Split result. Totals count Augment or
+Pseudo once per row. Draft-only removal does not delete the source histories.
 
 Project assignments, saved dataset combinations, draggable Split recipes and
 Pseudo annotation snapshots are described in

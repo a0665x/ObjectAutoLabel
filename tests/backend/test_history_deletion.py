@@ -15,6 +15,62 @@ def make_repo(tmp_path: Path) -> Repository:
     return Repository(db=db, paths=AppPaths(project_root=tmp_path))
 
 
+def test_source_history_deletion_removes_only_owned_copy_and_full_lineage(tmp_path):
+    repo=make_repo(tmp_path)
+    lineage=build_lineage(repo,tmp_path)
+    pid=lineage['project']['id']
+    raw=tmp_path/'raw'/'same-folder'
+    raw.mkdir(parents=True)
+    (raw/'image.jpg').write_bytes(b'original')
+    source=repo.create_source_asset(pid,'image_folder',str(raw))
+    retained=repo.create_source_asset(pid,'image_folder',str(raw))
+    root=Path(lineage['project']['root_path'])
+    copied=root/'sources'/source['id']/'images'/'image.jpg'
+    copied.parent.mkdir(parents=True);copied.write_bytes(b'copy')
+    kept=root/'sources'/retained['id']/'images'/'image.jpg'
+    kept.parent.mkdir(parents=True);kept.write_bytes(b'other copy')
+    image=repo.create_image(pid,str(copied),source_asset_id=source['id'])
+    other=repo.create_image(pid,str(kept),source_asset_id=retained['id'])
+    repo.db.execute('update pseudo_label_runs set source_asset_id = ? where id = ?',(source['id'],lineage['pseudo']['id']))
+    repo.db.commit()
+    result=project_services.delete_history_artifact(repo,pid,'source',source['id'])
+    assert result['deleted']=={'source':1,'pseudo':1,'augmentation':1,'split':1,'training':1,'conversion':1,'export':1}
+    assert repo.get_source_asset(source['id']) is None
+    assert repo.get_image(image['id']) is None
+    assert not copied.exists()
+    assert (raw/'image.jpg').read_bytes()==b'original'
+    assert kept.read_bytes()==b'other copy'
+    assert repo.get_source_asset(retained['id']) and repo.get_image(other['id'])
+
+
+def test_source_history_deletion_handles_legacy_snapshots_and_blocks_active_work(tmp_path):
+    repo=make_repo(tmp_path);lineage=build_lineage(repo,tmp_path);pid=lineage['project']['id']
+    source=repo.create_source_asset(pid,'image_folder','/raw/images')
+    image=repo.create_image(pid,str(Path(lineage['project']['root_path'])/'sources'/source['id']/'a.jpg'),source_asset_id=source['id'])
+    repo.assign_pseudo_label_run_to_images(lineage['pseudo']['id'],[image['id']])
+    # Null-source legacy runs still depend on this Source's snapshot images.
+    assert lineage['pseudo']['source_asset_id'] is None
+    job=repo.create_job('frame_extraction',project_id=pid)
+    with pytest.raises(ValueError,match='project jobs are running'):
+        project_services.delete_history_artifact(repo,pid,'source',source['id'])
+    assert repo.get_source_asset(source['id']) and repo.get_image(image['id'])
+    repo.update_job(job['id'],status='completed')
+    plan=repo.build_history_deletion_plan(pid,'source',source['id'])
+    assert lineage['pseudo']['id'] in plan['ids']['pseudo']
+    assert lineage['bundle']['id'] in plan['ids']['export']
+
+
+def test_source_delete_detects_new_dependencies_after_plan_was_built(tmp_path):
+    repo=make_repo(tmp_path);project=repo.create_project('Source mutation')
+    source=repo.create_source_asset(project['id'],'image_folder','/raw/images')
+    plan=repo.build_history_deletion_plan(project['id'],'source',source['id'])
+    schema=repo.create_class_schema(project['id'],'people',[{'class_id':0,'class_name':'person'}])
+    repo.create_pseudo_label_run_record(project_id=project['id'],schema_id=schema['id'],source_asset_id=source['id'],world_model='world.pt',output_dir=str(Path(project['root_path'])/'pseudo_labels'/'new'),confidence=.1,iou=.7,image_count=1,labeled_count=1)
+    with pytest.raises(ValueError,match='dependencies changed'):
+        repo.delete_history_records(project['id'],plan)
+    assert repo.get_source_asset(source['id'])
+
+
 def build_lineage(repo: Repository, tmp_path: Path) -> dict[str, dict[str, object]]:
     project = repo.create_project("History cascade")
     root = Path(project["root_path"])

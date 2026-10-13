@@ -259,6 +259,13 @@ export type ImageSourceSummary = {
 };
 
 export type PseudoLabelRun = {
+  source_asset_id?:string|null;
+  filter_large_boxes?:boolean|number;
+  max_box_area_ratio?:number|null;
+  min_box_area_ratio?:number|null;
+  area_filter_mode?:'auto'|'manual';
+  area_histogram_json?:string|null;
+  filtered_box_count?:number|null;
   id: string;
   project_id?: string;
   schema_id?: string | null;
@@ -289,6 +296,8 @@ export type AugmentationRun = {
 };
 
 export type DatasetSplitRun = {
+  composition_id?:string|null;
+  composition_json?:string|null;
   id: string;
   project_id?: string;
   name?: string | null;

@@ -611,6 +611,11 @@ class Repository:
         job["result"] = json.loads(job["result_json"]) if job.get("result_json") else None
         return job
 
+    def duplicate_sources(self, project_id: str, kind: str, path: str) -> list[dict[str, Any]]:
+        canonical = Path(path).expanduser().resolve()
+        return [source for source in self.list_source_assets(project_id)
+                if source['kind'] == kind and Path(source['path']).expanduser().resolve() == canonical]
+
     def create_source_asset(self, project_id: str, kind: str, path: str) -> dict[str, Any]:
         source_id = new_id()
         now = utc_now()
@@ -992,6 +997,8 @@ class Repository:
         source_origin: str | None = None,
         source_groups: list[str] | None = None,
         low_confidence_threshold: float = 0.5,
+        pseudo_label_run_id: str | None = None,
+        augmentation_run_id: str | None = None,
     ) -> tuple[str, list[Any]]:
         filters = [
             "images.project_id = ?",
@@ -999,6 +1006,13 @@ class Repository:
             "(images.source_origin != 'open_data' or exists (select 1 from open_data_imports odi where odi.id = images.open_data_import_id and odi.status = 'active'))",
         ]
         params: list[Any] = [project_id]
+
+        if pseudo_label_run_id is not None:
+            filters.append("(images.source_origin != 'project' or images.augmentation_run_id is not null or images.pseudo_label_run_id = ? or exists (select 1 from pseudo_image_snapshots s where s.image_id = images.id and s.run_id = ?))")
+            params.extend([pseudo_label_run_id, pseudo_label_run_id])
+        if augmentation_run_id is not None:
+            filters.append("(images.augmentation_run_id is null or images.augmentation_run_id = ?)")
+            params.append(augmentation_run_id)
 
         if review_status is not None:
             filters.append("images.review_status = ?")
@@ -1028,6 +1042,13 @@ class Repository:
                       and annotations.confidence < ?
                 )
             """
+            if pseudo_label_run_id:
+                low_confidence_clause = """case when exists (select 1 from pseudo_image_snapshots s where s.image_id = images.id and s.run_id = ? and images.augmentation_run_id is null)
+                    then exists (select 1 from pseudo_image_snapshots s, json_each(s.annotations_json) a where s.image_id = images.id and s.run_id = ? and json_extract(a.value, '$.confidence') < ?)
+                    else exists (select 1 from annotations a where a.image_id = images.id and a.confidence < ?) end"""
+                filters.append(low_confidence_clause if has_low_confidence else f"not ({low_confidence_clause})")
+                params.extend([pseudo_label_run_id, pseudo_label_run_id, low_confidence_threshold, low_confidence_threshold])
+                return " and ".join(filters), params
             filters.append(
                 low_confidence_clause if has_low_confidence else f"not {low_confidence_clause}"
             )
@@ -1046,6 +1067,8 @@ class Repository:
         limit: int = 100,
         offset: int = 0,
         low_confidence_threshold: float = 0.5,
+        pseudo_label_run_id: str | None = None,
+        augmentation_run_id: str | None = None,
     ) -> list[dict[str, Any]]:
         where_clause, params = self._active_image_filter_clause(
             project_id,
@@ -1055,9 +1078,11 @@ class Repository:
             source_origin=source_origin,
             source_groups=source_groups,
             low_confidence_threshold=low_confidence_threshold,
+            pseudo_label_run_id=pseudo_label_run_id,
+            augmentation_run_id=augmentation_run_id,
         )
         params.extend([limit, offset])
-        return rows_to_dicts(
+        result = rows_to_dicts(
             self.db.execute(
                 f"""
                 select images.*,
@@ -1074,8 +1099,22 @@ class Repository:
                 params,
             ).fetchall()
         )
+        if pseudo_label_run_id:
+            snapshots = {row['image_id']: json.loads(row['annotations_json']) for row in self.db.execute('select image_id, annotations_json from pseudo_image_snapshots where run_id = ?', (pseudo_label_run_id,)).fetchall()}
+            for image in result:
+                if image['id'] not in snapshots or image.get('augmentation_run_id') or image.get('source_origin') == 'open_data':
+                    continue
+                annotations = snapshots[image['id']]
+                confidence = [a['confidence'] for a in annotations if a.get('confidence') is not None]
+                image.update(pseudo_label_run_id=pseudo_label_run_id, annotation_count=len(annotations), mean_confidence=sum(confidence)/len(confidence) if confidence else None,
+                             min_confidence=min(confidence) if confidence else None, max_confidence=max(confidence) if confidence else None, low_confidence_count=sum(c < .5 for c in confidence))
+        return result
 
-    def get_review_source_counts(self, project_id: str) -> dict[str, int]:
+    def get_review_source_counts(self, project_id: str, pseudo_label_run_id: str | None = None, augmentation_run_id: str | None = None) -> dict[str, int]:
+        if pseudo_label_run_id is not None or augmentation_run_id is not None:
+            return {group: self.db.execute(f'select count(*) count from images where {where}', params).fetchone()['count']
+                    for group in ('pseudo', 'augment', 'open_data')
+                    for where, params in [self._active_image_filter_clause(project_id, source_groups=[group], pseudo_label_run_id=pseudo_label_run_id, augmentation_run_id=augmentation_run_id)]}
         row = self.db.execute("""
             select
               sum(case when source_origin = 'project' and augmentation_run_id is null and pseudo_label_run_id is not null then 1 else 0 end) pseudo,
@@ -1086,15 +1125,21 @@ class Repository:
         """, (project_id,)).fetchone()
         return {key: int(row[key] or 0) for key in ("pseudo", "augment", "open_data")}
 
-    def get_bbox_histogram(self, project_id: str, source_groups: list[str] | None = None) -> list[dict[str, Any]]:
-        where, params = self._active_image_filter_clause(project_id, source_groups=source_groups)
-        rows = self.db.execute(f"""
-            select annotations.class_id, annotations.class_name,
+    def get_bbox_histogram(self, project_id: str, source_groups: list[str] | None = None, pseudo_label_run_id: str | None = None, augmentation_run_id: str | None = None) -> list[dict[str, Any]]:
+        where, params = self._active_image_filter_clause(project_id, source_groups=source_groups, pseudo_label_run_id=pseudo_label_run_id, augmentation_run_id=augmentation_run_id)
+        rows = list(self.db.execute(f"""
+            select annotations.image_id, annotations.class_id, annotations.class_name,
               annotations.width * annotations.height * 100 area_percent
             from annotations join images on images.id = annotations.image_id
             where {where}
             order by annotations.class_id, area_percent
-        """, params).fetchall()
+        """, params).fetchall())
+        if pseudo_label_run_id:
+            # Replace only the selected Pseudo's live rows with its retained boxes.
+            snapshots = self.db.execute(f"""select s.image_id, s.annotations_json from pseudo_image_snapshots s join images on images.id = s.image_id where s.run_id = ? and images.augmentation_run_id is null and images.source_origin = 'project' and {where}""", [pseudo_label_run_id, *params]).fetchall()
+            snap_ids = {row['image_id'] for row in snapshots}
+            rows = [row for row in rows if row['image_id'] not in snap_ids]
+            rows.extend({'class_id': a['class_id'], 'class_name': a['class_name'], 'area_percent': a['width'] * a['height'] * 100} for row in snapshots for a in json.loads(row['annotations_json']))
         grouped: dict[tuple[int, str], list[float]] = {}
         for row in rows:
             key = (int(row["class_id"]), str(row["class_name"]))
@@ -1164,6 +1209,8 @@ class Repository:
         source_origin: str | None = None,
         source_groups: list[str] | None = None,
         low_confidence_threshold: float = 0.5,
+        pseudo_label_run_id: str | None = None,
+        augmentation_run_id: str | None = None,
     ) -> dict[str, int] | None:
         active_image = self.db.execute(
             """select id, path from images where id = ? and project_id = ? and removed_at is null
@@ -1181,6 +1228,8 @@ class Repository:
             source_origin=source_origin,
             source_groups=source_groups,
             low_confidence_threshold=low_confidence_threshold,
+            pseudo_label_run_id=pseudo_label_run_id,
+            augmentation_run_id=augmentation_run_id,
         )
         rank_params = [active_image["path"], active_image["path"], active_image["id"]]
         filtered_row = self.db.execute(
@@ -1353,6 +1402,38 @@ class Repository:
             ).fetchall()
         )
 
+    def review_annotations(self, image_id: str, pseudo_label_run_id: str | None = None) -> list[dict[str, Any]]:
+        if not pseudo_label_run_id:
+            return self.list_annotations(image_id)
+        image = self.get_image(image_id)
+        if not image or image.get('augmentation_run_id') or image.get('source_origin') == 'open_data':
+            raise ValueError('This image does not belong to the selected Pseudo version')
+        run = self.get_pseudo_label_run(pseudo_label_run_id)
+        if not run or run['project_id'] != image['project_id']:
+            raise ValueError('Pseudo version is no longer available in this project')
+        snapshot = self.db.execute('select annotations_json from pseudo_image_snapshots where run_id = ? and image_id = ?', (pseudo_label_run_id, image_id)).fetchone()
+        if snapshot:
+            return json.loads(snapshot['annotations_json'])
+        if image.get('pseudo_label_run_id') == pseudo_label_run_id:
+            return self.list_annotations(image_id)
+        raise ValueError('This image has no retained labels for the selected Pseudo version')
+
+    def save_review_snapshot(self, image_id: str, run_id: str, annotations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        from .workflow import recipe_branches
+        existing = self.review_annotations(image_id, run_id)
+        image = self.get_image(image_id)
+        saved = [{**a, 'id': a.get('id') or new_id(), 'image_id': image_id} for a in annotations]
+        compare_keys = ('class_id', 'class_name', 'x_center', 'y_center', 'width', 'height')
+        changed = [tuple(a.get(k) for k in compare_keys) for a in existing] != [tuple(a.get(k) for k in compare_keys) for a in saved]
+        with transaction(self.db):
+            self.db.execute('insert into pseudo_image_snapshots (run_id, image_id, annotations_json) values (?, ?, ?) on conflict(run_id, image_id) do update set annotations_json = excluded.annotations_json', (run_id, image_id, json.dumps(saved)))
+            if changed:
+                for split in self.db.execute('select id, pseudo_label_run_id, augmentation_run_id, composition_json, image_ids_json from dataset_splits where project_id = ?', (image['project_id'],)).fetchall():
+                    recipe = json.loads(split['composition_json']) if split['composition_json'] else dict(split)
+                    if any(branch.get('pseudo_label_run_id') == run_id and not branch.get('augmentation_run_id') for branch in recipe_branches(recipe)) and any(image_id in ids for ids in json.loads(split['image_ids_json'] or '{}').values()):
+                        self.db.execute('update dataset_splits set outdated = 1, outdated_reason = ? where id = ?', (json.dumps({'code':'annotations_changed', 'image_id':image_id, 'pseudo_label_run_id':run_id}), split['id']))
+        return saved
+
     def create_pseudo_label_run_record(
         self,
         project_id: str,
@@ -1370,6 +1451,12 @@ class Repository:
         last_image_path: str | None = None,
         job_id: str | None = None,
         run_name: str | None = None,
+        filter_large_boxes: bool = False,
+        max_box_area_ratio: float = 1 / 3,
+        filtered_box_count: int = 0,
+        min_box_area_ratio: float = 0,
+        area_filter_mode: str = 'manual',
+        area_histogram_json: str | None = None,
     ) -> dict[str, Any]:
         run_id = new_id()
         now = utc_now()
@@ -1379,8 +1466,10 @@ class Repository:
                 insert into pseudo_label_runs
                 (id, project_id, run_name, schema_id, source_asset_id, world_model, output_dir,
                  confidence, iou, image_count, labeled_count, raw_detection_count,
-                 merged_detection_count, merge_rate, last_image_path, job_id, created_at)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 merged_detection_count, merge_rate, last_image_path, job_id, created_at,
+                 filter_large_boxes, max_box_area_ratio, filtered_box_count,
+                 min_box_area_ratio, area_filter_mode, area_histogram_json)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -1400,6 +1489,12 @@ class Repository:
                     last_image_path,
                     job_id,
                     now,
+                    int(filter_large_boxes),
+                    max_box_area_ratio,
+                    filtered_box_count,
+                    min_box_area_ratio,
+                    area_filter_mode,
+                    area_histogram_json,
                 ),
             )
         row = self.db.execute("select * from pseudo_label_runs where id = ?", (run_id,)).fetchone()
@@ -1927,6 +2022,7 @@ class Repository:
     ) -> dict[str, Any]:
         """Resolve one history deletion and every downstream dependent record."""
         table_by_type = {
+            "source": "source_assets",
             "open_data": "open_data_imports",
             "pseudo": "pseudo_label_runs",
             "augmentation": "augmentation_runs",
@@ -1951,6 +2047,24 @@ class Repository:
         def select_ids(sql: str, values: Sequence[Any]) -> set[str]:
             return {str(row["id"]) for row in self.db.execute(sql, values).fetchall()}
 
+        source_image_ids: set[str] = set()
+        if ids['source']:
+            active = self.db.execute("select id from jobs where project_id = ? and status in ('queued', 'running', 'cancel_requested') limit 1", (project_id,)).fetchone()
+            if active:
+                raise ValueError('Source history cannot be deleted while project jobs are running')
+            marks = ', '.join('?' for _ in ids['source'])
+            source_image_ids = select_ids(f'select id from images where project_id = ? and source_asset_id in ({marks})', [project_id, *ids['source']])
+            ids['pseudo'].update(select_ids(f'select id from pseudo_label_runs where project_id = ? and source_asset_id in ({marks})', [project_id, *ids['source']]))
+            ids['pseudo'].update(select_ids(f'select distinct s.run_id id from pseudo_image_snapshots s join images i on i.id = s.image_id where i.project_id = ? and i.source_asset_id in ({marks})', [project_id, *ids['source']]))
+            ids['pseudo'].update(select_ids(f'select distinct pseudo_label_run_id id from images where project_id = ? and source_asset_id in ({marks}) and pseudo_label_run_id is not null', [project_id, *ids['source']]))
+            ids['augmentation'].update(select_ids(f'select distinct augmentation_run_id id from images where project_id = ? and source_asset_id in ({marks}) and augmentation_run_id is not null', [project_id, *ids['source']]))
+            for run in self.list_augmentation_runs(project_id):
+                if source_image_ids.intersection(self._json_image_ids(run.get('source_image_ids_json')) or set()):
+                    ids['augmentation'].add(run['id'])
+            for split in self.list_dataset_splits(project_id):
+                if source_image_ids.intersection(self._json_image_ids(split.get('image_ids_json')) or set()):
+                    ids['split'].add(split['id'])
+
         if ids["pseudo"]:
             pseudo_marks = ", ".join("?" for _ in ids["pseudo"])
             ids["augmentation"].update(select_ids(
@@ -1973,6 +2087,12 @@ class Repository:
                 f"select id from dataset_splits where project_id = ? and ({' or '.join(clauses)})",
                 values,
             ))
+            # Parallel inputs are recorded in the immutable composition snapshot.
+            from .workflow import recipe_branches
+            for split in self.db.execute('select id, composition_json from dataset_splits where project_id = ? and composition_json is not null', (project_id,)).fetchall():
+                recipe = json.loads(split['composition_json'])
+                if any(branch.get('pseudo_label_run_id') in ids['pseudo'] or branch.get('augmentation_run_id') in ids['augmentation'] for branch in recipe_branches(recipe)):
+                    ids['split'].add(split['id'])
         if ids["split"]:
             marks = ", ".join("?" for _ in ids["split"])
             ids["training"].update(select_ids(
@@ -1995,7 +2115,7 @@ class Repository:
         all_ids = sorted({item for values in ids.values() for item in values})
         job_ids: set[str] = set()
         for kind, values in ids.items():
-            if not values:
+            if not values or kind == 'source':
                 continue
             source_table = table_by_type[kind]
             marks = ", ".join("?" for _ in values)
@@ -2021,7 +2141,11 @@ class Repository:
             if active is not None:
                 raise ValueError("History cannot be deleted while a related job is still running")
 
-        paths: set[str] = set()
+        if ids['source']:
+            marks = ', '.join('?' for _ in ids['source'])
+            job_ids.update(str(row['job_id']) for row in self.db.execute(f'select job_id from frame_extraction_runs where project_id = ? and source_asset_id in ({marks}) and job_id is not null', [project_id, *ids['source']]).fetchall())
+        project = self.get_project(project_id)
+        paths: set[str] = {str(Path(project['root_path']) / 'sources' / source_id) for source_id in ids['source']}
         path_columns = {
             "pseudo": ("pseudo_label_runs", ("output_dir",)),
             "augmentation": ("augmentation_runs", ("output_dir",)),
@@ -2076,6 +2200,10 @@ class Repository:
 
         related_ids = sorted({item for values in ids.values() for item in values})
         with transaction(self.db):
+            if plan['artifact_type'] == 'source':
+                current = self.build_history_deletion_plan(project_id, 'source', plan['artifact_id'])
+                if current['ids'] != plan['ids'] or current['paths'] != plan['paths']:
+                    raise ValueError('Source dependencies changed; refresh history and retry')
             delete_ids("model_export_bundles", ids["export"])
             delete_ids("model_conversion_runs", ids["conversion"])
             if ids["training"]:
@@ -2098,6 +2226,10 @@ class Repository:
             # cascade from the record. project_dir is a shared download cache
             # and is intentionally absent from the filesystem deletion plan.
             delete_ids("open_data_imports", ids["open_data"])
+            if ids.get('source'):
+                marks = ', '.join('?' for _ in ids['source'])
+                self.db.execute(f'delete from images where project_id = ? and source_asset_id in ({marks})', [project_id, *ids['source']])
+                delete_ids('source_assets', ids['source'])
             if related_ids or plan.get("job_ids"):
                 marks = ", ".join("?" for _ in related_ids)
                 clauses = [f"related_id in ({marks})"] if related_ids else []

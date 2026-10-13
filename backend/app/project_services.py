@@ -63,6 +63,10 @@ def delete_history_artifact(
             ("output_model", "conversions"),
             ("output_model", "exports"),
         )
+        if artifact_type == 'source':
+            allowed_prefixes += (("sources",),)
+            if relative.parts[0] == 'sources' and (len(relative.parts) < 2 or relative.parts[1] not in plan['ids']['source']):
+                raise ValueError('Refusing to delete an unrelated Source directory')
         if not any(
             len(relative.parts) > len(prefix) and relative.parts[:len(prefix)] == prefix
             for prefix in allowed_prefixes
@@ -388,7 +392,8 @@ def sweep_pending_image_removal_trash(repo: Repository) -> None:
 
 
 def analyze_project_sources(repo: Repository, project_id: str, source_asset_id: str | None = None) -> dict[str, Any]:
-    images = repo.list_images(project_id, source_asset_id=source_asset_id, limit=100000, offset=0)
+    images = [image for image in repo.list_images(project_id, source_asset_id=source_asset_id, limit=100000, offset=0)
+              if not image.get('augmentation_run_id') and image.get('source_origin') != 'open_data']
     widths = [int(image["width"]) for image in images if image.get("width")]
     heights = [int(image["height"]) for image in images if image.get("height")]
     extensions: dict[str, int] = {}
@@ -626,13 +631,22 @@ def save_image_annotations(
     image_id: str,
     annotations: list[dict[str, Any]],
     review_status: str,
+    pseudo_label_run_id: str | None = None,
 ) -> dict[str, Any]:
     image = repo.get_image(image_id)
     if not image:
         raise FileNotFoundError(f"Image not found: {image_id}")
     _validate_annotation_bounds(annotations)
-    saved = repo.replace_image_annotations(image_id, annotations, review_status)
-    if image.get("pseudo_label_run_id") and not image.get("augmentation_run_id"):
+    if pseudo_label_run_id:
+        repo.review_annotations(image_id, pseudo_label_run_id)
+    historical = pseudo_label_run_id and image.get('pseudo_label_run_id') != pseudo_label_run_id
+    if historical:
+        saved = repo.save_review_snapshot(image_id, pseudo_label_run_id, annotations)
+    else:
+        saved = repo.replace_image_annotations(image_id, annotations, review_status)
+        if pseudo_label_run_id:
+            repo.save_review_snapshot(image_id, pseudo_label_run_id, saved)
+    if not historical and image.get("pseudo_label_run_id") and not image.get("augmentation_run_id"):
         repo.snapshot_pseudo_images(image["pseudo_label_run_id"], [image_id])
     image_path = Path(image["path"])
     project = repo.get_project(image["project_id"])
@@ -642,6 +656,8 @@ def save_image_annotations(
         labels_dir = Path(open_import["project_dir"]) / "reviewed_labels" if open_import else Path(project["root_path"]) / "reviewed_labels"
     else:
         labels_dir = Path(project["root_path"]) / "reviewed_labels"
+    if historical:
+        labels_dir = labels_dir / pseudo_label_run_id
     label_path = labels_dir / f"{image_path.stem}.txt"
     write_yolo_labels(
         label_path,
@@ -698,7 +714,7 @@ def create_dataset_split(
     job_id: str,
     composition_id: str | None = None,
 ) -> dict[str, Any]:
-    from .workflow import validate_recipe
+    from .workflow import validate_recipe, recipe_branches
     composition = None
     if composition_id:
         record = repo.db.execute('select * from dataset_compositions where id = ? and project_id = ?', (composition_id, project_id)).fetchone()
@@ -744,6 +760,22 @@ def create_dataset_split(
         and image.get("augmentation_run_id") not in outdated_augmentation_ids
         and (not composition_id or augmentation_run_id is not None or (pseudo_label_run_id is not None and image.get("augmentation_run_id") is None))
     ]
+    if composition and composition.get('branches_json') is not None:
+        project_images = []
+        seen_images: set[str] = set()
+        for branch in recipe_branches(recipe):
+            pseudo_id, augment_id = branch['pseudo_label_run_id'], branch['augmentation_run_id']
+            candidates = repo.list_images(project_id, limit=100000) if augment_id else repo.pseudo_build_images(project_id, pseudo_id)
+            selected = [image for image in candidates if image.get('source_origin') != 'open_data'
+                        and (not augment_id or image.get('augmentation_run_id') == augment_id)
+                        and _build_annotations(repo, image)]
+            if not selected:
+                raise ValueError('A selected source group has no retained labeled images')
+            for image in selected:
+                if image['id'] in seen_images:
+                    raise ValueError('Source groups contain overlapping original images; choose distinct inputs or saved Augment builds')
+                seen_images.add(image['id'])
+                project_images.append(image)
     random.Random(42).shuffle(project_images)
     open_data_import = None
     if open_data_import_id:
@@ -889,6 +921,14 @@ def create_dataset_split(
                         job_id=job_id,
                     )
                     if composition:
+                        composition = {**composition, **recipe}
+                        composition['branches'] = []
+                        for branch in recipe_branches(recipe):
+                            pseudo = repo.get_pseudo_label_run(branch['pseudo_label_run_id']) if branch['pseudo_label_run_id'] else None
+                            augment = repo.get_augmentation_run(branch['augmentation_run_id']) if branch['augmentation_run_id'] else None
+                            composition['branches'].append({**branch,
+                                'pseudo_name': (pseudo or {}).get('run_name'), 'pseudo_count': (pseudo or {}).get('labeled_count', 0),
+                                'augmentation_name': (augment or {}).get('name'), 'augmentation_count': (augment or {}).get('created_image_count', 0)})
                         repo.db.execute("update dataset_splits set composition_id = ?, composition_json = ? where id = ?", (composition_id, json.dumps(composition, sort_keys=True), split['id']))
                         split['composition_id'] = composition_id
                         split['composition_json'] = json.dumps(composition, sort_keys=True)

@@ -26,6 +26,9 @@ def compact_training_lineage_label(repo: Repository, run: dict[str, Any]) -> str
     split_name = split.get("name") or "Unknown split"
     name = run.get("run_name") or f"Train_{run['id'][:8]}"
     lineage = f"[Pseudo · {pseudo_name}] → [Augment · {augmentation_name}]"
+    recipe = json.loads(split.get('composition_json') or '{}')
+    if len(recipe.get('branches', [])) > 1:
+        lineage = ' + '.join(f"([Pseudo · {branch.get('pseudo_name') or 'Unknown'}] → [Augment · {branch.get('augmentation_name') or 'None'}])" for branch in recipe['branches'])
     if open_data is not None:
         open_data_name = open_data.get("version_name") or open_data.get("dataset_key") or "linked import"
         lineage += f" + [Open Data · {open_data_name}]"

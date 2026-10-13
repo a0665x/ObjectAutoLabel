@@ -121,3 +121,95 @@ def test_unsupported_checkpoint_fails_with_filename(tmp_path: Path, monkeypatch:
             0.7,
             job_id=image["job_id"],
         )
+
+
+def test_selected_source_leaves_other_sources_and_their_labels_untouched(tmp_path,monkeypatch):
+    repo,project,schema,image=_pseudo_repo(tmp_path)
+    old_source=repo.create_source_asset(project['id'],'image_folder','/raw/old')
+    new_source=repo.create_source_asset(project['id'],'image_folder','/raw/中庄imgs_1012')
+    repo.db.execute('update images set source_asset_id = ? where id = ?',(old_source['id'],image['id']))
+    existing={'class_id':7,'class_name':'washer','x_center':.5,'y_center':.5,'width':.2,'height':.2}
+    repo.replace_image_annotations(image['id'],[existing],'reviewed')
+    retained=repo.list_annotations(image['id'])
+    new_image=repo.create_image(project['id'],str(tmp_path/'new.jpg'),source_asset_id=new_source['id'],width=64,height=64)
+    (repo.paths.world_model_dir/'yoloe-26n-seg.pt').write_bytes(b'weights')
+    class Model:
+        def __init__(self,*args):pass
+        def predict(self,*args):return [{'xyxy':[10.,20.,30.,40.],'prompt_class_id':0,'confidence':.9}]
+    monkeypatch.setattr('backend.app.world_models.PromptedWorldModel',Model)
+    monkeypatch.setattr('backend.app.world_models._draw_preview',lambda *args:None)
+    processed=[]
+    monkeypatch.setitem(sys.modules,'cv2',types.SimpleNamespace(imread=lambda path:processed.append(path) or np.zeros((64,64,3))))
+    run=run_yolo_world_pseudo_label(repo,project['id'],schema['id'],new_source['id'],'yoloe-26n-seg.pt',.25,.7,job_id=image['job_id'])
+    assert processed==[new_image['path'],new_image['path']]  # inference then filtered-preview pass
+    assert run['image_count']==1 and run['source_asset_id']==new_source['id']
+    assert repo.list_annotations(image['id'])==retained
+    assert repo.get_image(image['id'])['pseudo_label_run_id'] is None
+    assert repo.get_image(new_image['id'])['pseudo_label_run_id']==run['id']
+
+
+@pytest.mark.parametrize('enabled,ratio,expected,filtered',[(False,1/3,4,0),(True,1/3,3,1),(True,.05,0,4)])
+def test_large_box_filter_is_optional_strict_and_persisted(tmp_path,monkeypatch,enabled,ratio,expected,filtered):
+    repo,project,schema,image=_pseudo_repo(tmp_path)
+    (repo.paths.world_model_dir/'yoloe-26n-seg.pt').write_bytes(b'weights')
+    class Model:
+        def __init__(self,*args):pass
+        def predict(self,*args):return [
+            {'xyxy':[0.,0.,64.,64.],'prompt_class_id':0,'confidence':.99},
+            {'xyxy':[0.,0.,64.,64/3],'prompt_class_id':0,'confidence':.9},
+            {'xyxy':[8.,8.,24.,24.],'prompt_class_id':0,'confidence':.8},
+            {'xyxy':[8.,8.,24.,24.],'prompt_class_id':0,'confidence':.7},
+        ]
+    monkeypatch.setattr('backend.app.world_models.PromptedWorldModel',Model)
+    monkeypatch.setattr('backend.app.world_models._draw_preview',lambda *args:None)
+    monkeypatch.setitem(sys.modules,'cv2',types.SimpleNamespace(imread=lambda path:np.zeros((64,64,3))))
+    run=run_yolo_world_pseudo_label(repo,project['id'],schema['id'],None,'yoloe-26n-seg.pt',.25,.7,job_id=image['job_id'],filter_large_boxes=enabled,max_box_area_ratio=ratio)
+    assert len(repo.list_annotations(image['id']))==expected
+    assert run['filtered_box_count']==filtered
+    assert run['max_box_area_ratio']==ratio and bool(run['filter_large_boxes'])==enabled
+    assert run['labeled_count']==int(expected>0)
+    assert repo.get_image(image['id']) is not None
+    snapshot=repo.review_annotations(image['id'],run['id'])
+    assert len(snapshot)==expected
+
+
+def test_large_box_filter_does_not_count_merge_removals(tmp_path,monkeypatch):
+    repo,project,schema,image=_pseudo_repo(tmp_path)
+    (repo.paths.world_model_dir/'yoloe-26n-seg.pt').write_bytes(b'weights')
+    class Model:
+        def __init__(self,*args):pass
+        def predict(self,*args):return [
+            {'xyxy':[0.,0.,64.,64.],'prompt_class_id':0,'confidence':.99},
+            {'xyxy':[8.,8.,24.,24.],'prompt_class_id':0,'confidence':.8},
+            {'xyxy':[8.,8.,24.,24.],'prompt_class_id':0,'confidence':.7},
+        ]
+    monkeypatch.setattr('backend.app.world_models.PromptedWorldModel',Model)
+    monkeypatch.setattr('backend.app.world_models._draw_preview',lambda *args:None)
+    monkeypatch.setitem(sys.modules,'cv2',types.SimpleNamespace(imread=lambda path:np.zeros((64,64,3))))
+    run=run_yolo_world_pseudo_label(repo,project['id'],schema['id'],None,'yoloe-26n-seg.pt',.25,.7,merge_boxes=True,job_id=image['job_id'],filter_large_boxes=True)
+    assert run['raw_detection_count']==3
+    assert run['merged_detection_count']==1 and run['filtered_box_count']==1
+    assert len(repo.list_annotations(image['id']))==1
+
+
+@pytest.mark.parametrize('mode,lower,upper,expected', [('auto',0,1/3,4),('manual',.005,.02,3)])
+def test_area_filter_uses_current_run_modes_or_inclusive_manual_range(tmp_path,monkeypatch,mode,lower,upper,expected):
+    import json
+    repo,project,schema,image=_pseudo_repo(tmp_path)
+    (repo.paths.world_model_dir/'yoloe-26n-seg.pt').write_bytes(b'weights')
+    class Model:
+        def __init__(self,*args):pass
+        def predict(self,*args):return [
+            {'xyxy':[0,0,size,size],'prompt_class_id':0,'confidence':.9}
+            for size in [2,8,8,8,50,50,50,50,50]
+        ]
+    monkeypatch.setattr('backend.app.world_models.PromptedWorldModel',Model)
+    monkeypatch.setattr('backend.app.world_models._draw_preview',lambda *args:None)
+    monkeypatch.setitem(sys.modules,'cv2',types.SimpleNamespace(imread=lambda path:np.zeros((64,64,3))))
+    run=run_yolo_world_pseudo_label(repo,project['id'],schema['id'],None,'yoloe-26n-seg.pt',.25,.7,job_id=image['job_id'],filter_large_boxes=True,area_filter_mode=mode,min_box_area_ratio=lower,max_box_area_ratio=upper)
+    assert len(repo.list_annotations(image['id']))==expected
+    assert run['filtered_box_count']==9-expected
+    stats=json.loads(run['area_histogram_json'])
+    assert stats['box_count']==9 and stats['pre_filter']
+    if mode=='auto':assert run['max_box_area_ratio']==stats['suggested_max']
+    assert not (Path(run['output_dir'])/'_candidates').exists()

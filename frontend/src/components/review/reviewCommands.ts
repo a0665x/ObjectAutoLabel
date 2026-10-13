@@ -21,6 +21,7 @@ export type ReviewCommandContext = {
   canRedo: boolean;
   saving: boolean;
   removing?: boolean;
+  hasPreviousLabels?: boolean;
   handlers: {
     setTool: (tool: ReviewTool) => void;
     copy: () => void;
@@ -31,6 +32,7 @@ export type ReviewCommandContext = {
     undo: () => void | Promise<void>;
     redo: () => void | Promise<void>;
     removeImage?: () => void | Promise<void>;
+    reusePrevious?: () => void;
     cancel: () => void;
     save: () => void | Promise<void>;
     saveAndNext: () => void | Promise<void>;
@@ -57,6 +59,7 @@ export function createReviewCommands(context: ReviewCommandContext): ReviewComma
     { id: "relabel", group: "selection", label: "Relabel", enabled: context.hasSelection && !locked, run: handlers.relabel },
     { id: "undo", group: "history", label: "Undo", shortcut: "Ctrl/Cmd + Z", enabled: context.canUndo && !locked, run: handlers.undo },
     { id: "redo", group: "history", label: "Redo", shortcut: "Ctrl/Cmd + Shift + Z", enabled: context.canRedo && !locked, run: handlers.redo },
+    { id: 'reuse-previous', group: 'image', label: 'Reuse', enabled: context.hasImage && imageReady && Boolean(context.hasPreviousLabels) && !context.saving && !locked, run: () => handlers.reusePrevious?.() },
     { id: "remove-image", group: "image", label: "Remove Image From Project", shortcut: "Shift + X", enabled: context.hasImage && imageReady && !context.saving && !locked, danger: true, run: () => handlers.removeImage?.() },
     { id: "save", group: "workflow", label: "Save", shortcut: "Ctrl/Cmd + S", enabled: context.hasImage && !context.saving && !locked, run: handlers.save },
     { id: "save-next", group: "workflow", label: "Save & Next", shortcut: "N / Shift + S", enabled: context.hasImage && !context.saving && !locked, run: handlers.saveAndNext },

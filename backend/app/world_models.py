@@ -143,6 +143,10 @@ def run_yolo_world_pseudo_label(
     run_name: str | None = None,
     *,
     job_id: str,
+    filter_large_boxes: bool = False,
+    max_box_area_ratio: float = 1 / 3,
+    min_box_area_ratio: float = 0,
+    area_filter_mode: str = 'manual',
 ) -> dict[str, Any]:
     import cv2
 
@@ -162,6 +166,8 @@ def run_yolo_world_pseudo_label(
 
     images = [image for image in repo.list_images(project_id, limit=100000, offset=0) if image.get("source_origin") != "open_data" and not image.get("augmentation_run_id")]
     if source_asset_id:
+        from .workflow import artifact
+        artifact(repo, project_id, 'source', source_asset_id)
         images = [image for image in images if image["source_asset_id"] == source_asset_id]
 
     # Freeze the previously assigned labels before inference replaces live annotations.
@@ -179,8 +185,14 @@ def run_yolo_world_pseudo_label(
     detection_count = 0
     raw_detection_count = 0
     merged_detection_count = 0
+    filtered_box_count = 0
     last_image_preview: str | None = None
     processed_image_ids: list[str] = []
+    from .box_area import area_distribution
+    import json
+    areas: list[float] = []
+    candidates_dir = output_dir / '_candidates'
+    candidates_dir.mkdir()
 
     for index, image in enumerate(images, start=1):
         raise_if_cancelled(repo, job_id)
@@ -217,22 +229,46 @@ def run_yolo_world_pseudo_label(
             annotations = _merge_same_class_annotations(annotations, merge_iou)
         merged_count = len(annotations)
         merged_detection_count += max(0, raw_count - merged_count)
+        areas.extend(annotation['width'] * annotation['height'] for annotation in annotations)
+        # Stage candidates on disk so automatic filtering uses this entire run's
+        # distribution without keeping all images/annotations in memory.
+        (candidates_dir / f"{image['id']}.json").write_text(json.dumps(annotations))
+        processed_image_ids.append(image['id'])
+        preview_path = output_dir / "preview" / f"{image_path.stem}_preview.jpg"
+        _draw_preview(frame, annotations, preview_path)
+        last_image_preview = str(preview_path)
+        repo.update_job(job_id, progress=min(70, int(index / max(1, len(images)) * 70)),
+                        message=f"Detecting {index}/{len(images)} · boxes={len(areas)} · preview={last_image_preview}")
+
+    distribution = area_distribution(areas)
+    if filter_large_boxes and area_filter_mode == 'auto':
+        min_box_area_ratio, max_box_area_ratio = 0, distribution['suggested_max']
+    image_by_id = {image['id']: image for image in images}
+    for index, image_id in enumerate(processed_image_ids, start=1):
+        raise_if_cancelled(repo, job_id)
+        image = image_by_id[image_id]
+        image_path = Path(image['path'])
+        annotations = json.loads((candidates_dir / f'{image_id}.json').read_text())
+        if filter_large_boxes:
+            kept = [annotation for annotation in annotations if min_box_area_ratio <= annotation['width'] * annotation['height'] <= max_box_area_ratio]
+            filtered_box_count += len(annotations) - len(kept)
+            annotations = kept
         if annotations:
             labeled_count += 1
             detection_count += len(annotations)
         repo.replace_image_annotations(image["id"], annotations, review_status="pending_review")
-        processed_image_ids.append(image["id"])
         preview_path = output_dir / "preview" / f"{image_path.stem}_preview.jpg"
+        frame = cv2.imread(str(image_path))
         _draw_preview(frame, annotations, preview_path)
         last_image_preview = str(preview_path)
-        progress = min(99, int(index / max(1, len(images)) * 100))
+        progress = min(99, 70 + int(index / max(1, len(processed_image_ids)) * 29))
         merge_rate = 0.0 if raw_detection_count == 0 else merged_detection_count / raw_detection_count * 100
         repo.update_job(
             job_id,
             progress=progress,
             message=(
                 f"Processing {index}/{len(images)}: {image_path.name} · "
-                f"boxes={detection_count} · merged={merged_detection_count}/{raw_detection_count} ({merge_rate:.1f}%) · "
+                f"boxes={detection_count} · merged={merged_detection_count}/{raw_detection_count} ({merge_rate:.1f}%) · filtered={filtered_box_count} · "
                 f"preview={last_image_preview}"
             ),
         )
@@ -256,6 +292,12 @@ def run_yolo_world_pseudo_label(
         last_image_path=last_image_preview,
         job_id=job_id,
         run_name=run_name,
+        filter_large_boxes=filter_large_boxes,
+        max_box_area_ratio=max_box_area_ratio,
+        filtered_box_count=filtered_box_count,
+        min_box_area_ratio=min_box_area_ratio,
+        area_filter_mode=area_filter_mode,
+        area_histogram_json=json.dumps(distribution),
     ) | {
         "detections": detection_count,
         "raw_detections": raw_detection_count,
@@ -264,4 +306,7 @@ def run_yolo_world_pseudo_label(
         "last_image_path": last_image_preview,
     }
     repo.assign_pseudo_label_run_to_images(run["id"], processed_image_ids)
+    # Candidate boxes are summarized in history, not retained as a second label set.
+    import shutil
+    shutil.rmtree(candidates_dir)
     return run

@@ -128,6 +128,7 @@ describe("review command registry", () => {
       { id: "relabel", group: "selection", label: "Relabel", shortcut: undefined },
       { id: "undo", group: "history", label: "Undo", shortcut: "Ctrl/Cmd + Z" },
       { id: "redo", group: "history", label: "Redo", shortcut: "Ctrl/Cmd + Shift + Z" },
+      { id: 'reuse-previous', group: 'image', label: 'Reuse', shortcut: undefined },
       { id: "remove-image", group: "image", label: "Remove Image From Project", shortcut: "Shift + X" },
       { id: "save", group: "workflow", label: "Save", shortcut: "Ctrl/Cmd + S" },
       { id: "save-next", group: "workflow", label: "Save & Next", shortcut: "N / Shift + S" },

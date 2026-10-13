@@ -3,7 +3,7 @@ import type { ImageFilters, ReviewStats } from "../../api/client";
 import type { OpenDataImport, ProjectImage, SourceAsset } from "../../types";
 
 type SourceGroup = "pseudo" | "augment" | "open_data";
-type ImageQueueProps = { images: ProjectImage[]; activeImageId: string | null; filters: ImageFilters; stats: ReviewStats; sourceCounts?: Record<SourceGroup, number>; sources: SourceAsset[]; openDataImport?: OpenDataImport | null; loading: boolean; prefetching?: boolean; onSelectImage: (id: string) => void; onFilterChange: (partial: Partial<ImageFilters>) => void; };
+type ImageQueueProps = { images: ProjectImage[]; activeImageId: string | null; filters: ImageFilters; stats: ReviewStats; sourceCounts?: Record<SourceGroup, number>; sourceVersions?:{pseudo:string|null;augment:string|null}; sources: SourceAsset[]; openDataImport?: OpenDataImport | null; loading: boolean; prefetching?: boolean; onSelectImage: (id: string) => void; onFilterChange: (partial: Partial<ImageFilters>) => void; };
 
 export function confidenceRisk(image: ProjectImage): number | null {
   if (image.mean_confidence == null) return null;
@@ -29,7 +29,7 @@ export function confidenceLevels(images: ProjectImage[]): Map<string, number> {
 const LABELS: Record<SourceGroup, string> = { pseudo: "Pseudo Label images", augment: "Augment images", open_data: "Open Sources" };
 export function imageSourceGroup(image: ProjectImage): SourceGroup { return image.source_origin === "open_data" ? "open_data" : image.augmentation_run_id ? "augment" : "pseudo"; }
 
-export function ImageQueue({ images, activeImageId, filters, stats, sourceCounts = { pseudo: 0, augment: 0, open_data: 0 }, openDataImport, loading, prefetching = false, onSelectImage, onFilterChange }: ImageQueueProps) {
+export function ImageQueue({ images, activeImageId, filters, stats, sourceCounts = { pseudo: 0, augment: 0, open_data: 0 }, sourceVersions, openDataImport, loading, prefetching = false, onSelectImage, onFilterChange }: ImageQueueProps) {
   const ui = useUiText();
   const selected = filters.source_groups ?? ["pseudo", "augment", "open_data"];
   const levels = confidenceLevels(images);
@@ -39,7 +39,11 @@ export function ImageQueue({ images, activeImageId, filters, stats, sourceCounts
     <p className="muted">{images.length} {ui("selected images")}{prefetching ? ui(" · preloading next boxes") : ""}</p>
     <p className="muted">{ui("Cell color is relative risk within this selection.")}</p>
     <div className="source-composition" role="group" aria-label={ui("Dataset composition")}>
-      {(["pseudo", "augment", "open_data"] as SourceGroup[]).map((group) => <button type="button" key={group} aria-pressed={group === "open_data" && !openDataImport ? false : selected.includes(group)} disabled={group === "open_data" && !openDataImport} onClick={() => toggle(group)}><span>{ui(LABELS[group])}</span><strong>{sourceCounts[group]}</strong></button>)}
+      {(["pseudo", "augment", "open_data"] as SourceGroup[]).map((group) => {
+        const name=group==='open_data'?openDataImport?.version_name:sourceVersions?.[group];
+        const unavailable=group==='open_data'?!openDataImport:sourceVersions!==undefined&&!name;
+        return <button type="button" key={group} aria-pressed={!unavailable&&selected.includes(group)} disabled={unavailable} onClick={() => toggle(group)}><span>{ui(LABELS[group])}{sourceVersions&&<small className="review-assigned-source">{name??ui('Assigned: {name}',{name:ui('None')})}</small>}</span><strong>{sourceCounts[group]}</strong></button>;
+      })}
     </div>
     <div className="confidence-legend"><span>{ui("Needs attention")}</span>{[1,2,3,4,5].map((level) => <i key={level} className={`confidence-cell confidence-${level}`} />)}<span>{ui("Most consistent")}</span></div>
     <p className="muted">{ui("Ranking combines mean/min confidence, box spread, low-confidence ratio and box count. Gray has no model confidence.")}</p>

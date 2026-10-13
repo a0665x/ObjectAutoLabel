@@ -19,6 +19,8 @@ export type ImageFilters = {
   source_asset_id?: string;
   source_origin?: "project" | "open_data";
   source_groups?: Array<"pseudo" | "augment" | "open_data">;
+  pseudo_label_run_id?: string;
+  augmentation_run_id?: string;
   limit?: number;
   offset?: number;
 };
@@ -66,6 +68,19 @@ export type ValidationPreviewResult = {
   annotations: Array<SplitSampleAnnotation & { confidence?: number | null }>;
 };
 
+export class ApiError extends Error {
+  constructor(message:string,public status:number,public detail?:unknown){super(message);}
+}
+
+export type BoxAreaDistribution = {
+  bins: Array<{lower:number;upper:number;count:number}>;
+  box_count:number;
+  suggested_max:number;
+  pre_filter:boolean;
+  run_id?:string|null;
+  run_name?:string|null;
+};
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
@@ -74,15 +89,18 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!response.ok) {
     const text = await response.text();
     let message = text || response.statusText;
+    let detail:unknown;
     if (text) {
       try {
         const parsed = JSON.parse(text) as { detail?: unknown };
+        detail=parsed.detail;
         if (typeof parsed.detail === "string") message = parsed.detail;
+        else if(parsed.detail&&typeof parsed.detail==='object'&&'message' in parsed.detail)message=String(parsed.detail.message);
       } catch {
         // Preserve non-JSON backend errors verbatim.
       }
     }
-    throw new Error(message);
+    throw new ApiError(message,response.status,detail);
   }
   return response.json() as Promise<T>;
 }
@@ -97,6 +115,8 @@ export function buildImageQuery(filters: ImageFilters): string {
   if (filters.source_asset_id) params.set("source_asset_id", filters.source_asset_id);
   if (filters.source_origin) params.set("source_origin", filters.source_origin);
   if (filters.source_groups?.length) params.set("source_groups", filters.source_groups.join(","));
+  if (filters.pseudo_label_run_id !== undefined) params.set('pseudo_label_run_id',filters.pseudo_label_run_id);
+  if (filters.augmentation_run_id !== undefined) params.set('augmentation_run_id',filters.augmentation_run_id);
   if (typeof filters.limit === "number") params.set("limit", String(filters.limit));
   if (typeof filters.offset === "number") params.set("offset", String(filters.offset));
 
@@ -201,7 +221,8 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   sources: (projectId: string) => request<SourceAsset[]>(`/api/projects/${projectId}/sources`),
-  createSource: (projectId: string, payload: { kind: string; path: string }) =>
+  pseudoAreaDistribution: (projectId:string,sourceId:string) => request<BoxAreaDistribution>(`/api/projects/${projectId}/pseudo-area-distribution?source_asset_id=${encodeURIComponent(sourceId)}`),
+  createSource: (projectId: string, payload: { kind: string; path: string; allow_duplicate?:boolean }) =>
     request<SourceAsset>(`/api/projects/${projectId}/sources`, { method: "POST", body: JSON.stringify(payload) }),
   sourceAnalysis: (projectId: string, payload: { source_asset_id?: string | null }) =>
     request<SourceAnalysis>(`/api/projects/${projectId}/source-analysis`, { method: "POST", body: JSON.stringify(payload) }),
@@ -216,20 +237,21 @@ export const api = {
       has_low_confidence: filters.has_low_confidence,
       source_asset_id: filters.source_asset_id,
       source_origin: filters.source_origin,
-      source_groups: filters.source_groups
+      source_groups: filters.source_groups,
+      pseudo_label_run_id:filters.pseudo_label_run_id,augmentation_run_id:filters.augmentation_run_id
     });
     const separator = query ? "&" : "?";
     return request<ReviewImagePosition>(
       `/api/projects/${projectId}/image-position${query}${separator}image_id=${encodeURIComponent(imageId)}`
     );
   },
-  reviewSourceCounts: (projectId: string) => request<Record<"pseudo" | "augment" | "open_data", number>>(`/api/projects/${projectId}/review-source-counts`),
+  reviewSourceCounts: (projectId: string, filters:ImageFilters={}) => request<Record<"pseudo" | "augment" | "open_data", number>>(`/api/projects/${projectId}/review-source-counts${buildImageQuery({pseudo_label_run_id:filters.pseudo_label_run_id,augmentation_run_id:filters.augmentation_run_id})}`),
   bboxHistogram: (projectId: string, filters: ImageFilters = {}) =>
     request<BboxHistogramClass[]>(`/api/projects/${projectId}/bbox-histogram${buildImageQuery(filters)}`),
-  annotations: (imageId: string) =>
-    request<{ image: ProjectImage; annotations: Annotation[] }>(`/api/images/${imageId}/annotations`),
-  saveAnnotations: (imageId: string, payload: { annotations: Annotation[]; review_status: string }) =>
-    request<{ annotations: Annotation[]; label_path: string }>(`/api/images/${imageId}/annotations`, {
+  annotations: (imageId: string, pseudoId?:string) =>
+    request<{ image: ProjectImage; annotations: Annotation[] }>(`/api/images/${imageId}/annotations${pseudoId?buildImageQuery({pseudo_label_run_id:pseudoId}):''}`),
+  saveAnnotations: (imageId: string, payload: { annotations: Annotation[]; review_status: string }, pseudoId?:string) =>
+    request<{ annotations: Annotation[]; label_path: string }>(`/api/images/${imageId}/annotations${pseudoId?buildImageQuery({pseudo_label_run_id:pseudoId}):''}`, {
       method: "PUT",
       body: JSON.stringify(payload)
     }),
@@ -265,7 +287,7 @@ export const api = {
   datasetSplitSamples: (projectId: string, splitId: string, limitPerBucket = 6, sampleSeed?: number) =>
     request<SplitSamples>(buildDatasetSplitSamplesPath(projectId, splitId, limitPerBucket, sampleSeed)),
   trainingRuns: (projectId: string) => request<TrainingRun[]>(`/api/projects/${projectId}/training-runs`),
-  deleteHistory: (projectId: string, artifactType: "open_data" | "pseudo" | "augmentation" | "split" | "training" | "conversion" | "export", artifactId: string) =>
+  deleteHistory: (projectId: string, artifactType: "source" | "open_data" | "pseudo" | "augmentation" | "split" | "training" | "conversion" | "export", artifactId: string) =>
     request<{ deleted: Record<string, number>; removed_paths: string[] }>(
       `/api/projects/${projectId}/history/${artifactType}/${encodeURIComponent(artifactId)}`,
       { method: "DELETE" }

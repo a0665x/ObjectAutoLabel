@@ -1,5 +1,5 @@
 import {useUiText} from '../../uiText';
-import { ChevronLeft, ChevronRight, Hand, LocateFixed, Maximize2, Save, Scan, SkipForward, SquarePen, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronLeft, ChevronRight, CopyPlus, Hand, LocateFixed, Maximize2, Save, Scan, SkipForward, SquarePen, ZoomIn, ZoomOut } from "lucide-react";
 
 import type { ReviewImagePosition } from "../../types";
 import { ReviewEditMenu } from "./ReviewEditMenu";
@@ -13,6 +13,8 @@ type AnnotationToolbarProps = {
   saving: boolean;
   locked?: boolean;
   busyLabel?: string | null;
+  reuseTitle?:string;
+  reuseStatus?:string;
   zoom: number;
   position?: ReviewImagePosition | null;
   commands?: ReviewCommand[];
@@ -38,6 +40,8 @@ export function AnnotationToolbar({
   saving,
   locked = false,
   busyLabel = null,
+  reuseTitle,
+  reuseStatus,
   zoom,
   position,
   commands,
@@ -116,6 +120,7 @@ export function AnnotationToolbar({
         </div>
       </div>
       <div className="toolbar-secondary-row">
+        <div className="toolbar-edit-tools">
         <div className="segmented-control toolbar-tool-group" role="tablist" aria-label={ui("Annotation tools")}>
           <button type="button" aria-pressed={toolChecked(selectCommand, "select")} disabled={commandDisabled(selectCommand, false)} className={`tool-select ${toolChecked(selectCommand, "select") ? "is-active" : ""}`} onClick={() => runTool("tool-select", "select")} title={ui("Select mode: click an existing box to move, resize, or relabel it (D)")}>
             <LocateFixed size={16} /><span>{ui("Select")}</span><kbd>{ui("D")}</kbd>
@@ -126,6 +131,8 @@ export function AnnotationToolbar({
           <button type="button" aria-pressed={toolChecked(panCommand, "pan")} disabled={commandDisabled(panCommand, false)} className={`tool-pan ${toolChecked(panCommand, "pan") ? "is-active" : ""}`} onClick={() => runTool("tool-pan", "pan")} title={ui("Pan mode: drag the stage without editing boxes (H)")}>
             <Hand size={16} /><span>{ui("Pan")}</span><kbd>{ui("H")}</kbd>
           </button>
+        </div>
+          <button type="button" className="secondary action-reuse" disabled={!command('reuse-previous')?.enabled} onClick={()=>{const item=command('reuse-previous');if(item?.enabled)void item.run();}} title={reuseTitle??ui('Reuse labels from the previous image in this queue, only within the same Source/version. Adds missing boxes without replacing existing labels; Undo is available. Save after checking.')}><CopyPlus size={16}/><span>{ui('Reuse')}</span></button>
         </div>
         <div className="review-shortcuts" aria-label={ui("Review shortcuts")}>
           <span><kbd>{ui("Zoomed drag")}</kbd> {ui("pan")}</span>
@@ -138,6 +145,7 @@ export function AnnotationToolbar({
           <span><kbd>{ui("Arrow keys")}</kbd> {ui("move ·")} <kbd>Shift</kbd> ×10</span>
         </div>
       </div>
+      {reuseStatus?<small className="reuse-status muted" role="status">{reuseStatus}</small>:null}
     </section>
   );
 }

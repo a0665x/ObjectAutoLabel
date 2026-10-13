@@ -11,7 +11,7 @@ export function VersionInspector({page}:{page:string}) {
   const w=workflowText(runtime?.language);
   const focus=runtime?.focus;
   const visible=focus&&sourcePages[focus.stage]===page;
-  const version=visible?runtime?.state?.catalog[focus.stage].find(item=>item.id===focus.id):undefined;
+  const version=visible?runtime?.state?.catalog[focus.stage]?.find(item=>item.id===focus.id):undefined;
   const panel=useRef<HTMLElement>(null);
   useEffect(()=>{
     if(!visible)return;

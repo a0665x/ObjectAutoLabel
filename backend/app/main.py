@@ -489,7 +489,11 @@ def create_source(project_id: str, payload: SourceCreate) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Project not found")
     if payload.kind not in {"video", "image_folder"}:
         raise HTTPException(status_code=422, detail="kind must be video or image_folder")
-    source = repo.create_source_asset(project_id=project_id, kind=payload.kind, path=payload.path)
+    with repo.db.synchronized():
+        duplicates = repo.duplicate_sources(project_id, payload.kind, payload.path)
+        if duplicates and not payload.allow_duplicate:
+            raise HTTPException(409, detail={'code': 'duplicate_source', 'message': 'This Source is already registered in this project', 'sources': [{'id': item['id'], 'path': item['path']} for item in duplicates]})
+        source = repo.create_source_asset(project_id=project_id, kind=payload.kind, path=payload.path)
     if payload.kind == "image_folder":
         project_services.register_image_folder(repo, project_id, source["id"], payload.path)
     return source
@@ -512,6 +516,8 @@ def list_project_images(
     source_groups: str | None = None,
     limit: int = 100,
     offset: int = 0,
+    pseudo_label_run_id: str | None = None,
+    augmentation_run_id: str | None = None,
 ) -> list[dict[str, Any]]:
     if not repo.get_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
@@ -524,19 +530,21 @@ def list_project_images(
         source_groups=source_groups.split(",") if source_groups else None,
         limit=limit,
         offset=offset,
+        pseudo_label_run_id=pseudo_label_run_id,
+        augmentation_run_id=augmentation_run_id,
     )
 
 
 @app.get("/api/projects/{project_id}/review-source-counts")
-def review_source_counts(project_id: str) -> dict[str, int]:
+def review_source_counts(project_id: str, pseudo_label_run_id: str | None = None, augmentation_run_id: str | None = None) -> dict[str, int]:
     if not repo.get_project(project_id): raise HTTPException(status_code=404, detail="Project not found")
-    return repo.get_review_source_counts(project_id)
+    return repo.get_review_source_counts(project_id, pseudo_label_run_id, augmentation_run_id)
 
 
 @app.get("/api/projects/{project_id}/bbox-histogram")
-def bbox_histogram(project_id: str, source_groups: str | None = None) -> list[dict[str, Any]]:
+def bbox_histogram(project_id: str, source_groups: str | None = None, pseudo_label_run_id: str | None = None, augmentation_run_id: str | None = None) -> list[dict[str, Any]]:
     if not repo.get_project(project_id): raise HTTPException(status_code=404, detail="Project not found")
-    return repo.get_bbox_histogram(project_id, source_groups.split(",") if source_groups else None)
+    return repo.get_bbox_histogram(project_id, source_groups.split(",") if source_groups else None, pseudo_label_run_id, augmentation_run_id)
 
 
 @app.get("/api/projects/{project_id}/image-position")
@@ -548,6 +556,8 @@ def get_image_position(
     source_asset_id: str | None = None,
     source_origin: str | None = None,
     source_groups: str | None = None,
+    pseudo_label_run_id: str | None = None,
+    augmentation_run_id: str | None = None,
 ) -> dict[str, int]:
     if not repo.get_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
@@ -559,6 +569,8 @@ def get_image_position(
         source_asset_id=source_asset_id,
         source_origin=source_origin,
         source_groups=source_groups.split(",") if source_groups else None,
+        pseudo_label_run_id=pseudo_label_run_id,
+        augmentation_run_id=augmentation_run_id,
     )
     if position is None:
         raise HTTPException(status_code=404, detail="Image not found")
@@ -704,6 +716,14 @@ def create_pseudo_label_run(project_id: str, payload: PseudoLabelRunCreate) -> d
     active = repo.find_active_job(project_id, "pseudo_label")
     if active:
         raise HTTPException(status_code=409, detail="Pseudo-label generation is already running for this project. Wait for it to finish before starting another run.")
+    if not payload.source_asset_id:
+        payload.source_asset_id = workflow.read_state(repo, project_id)['assignments'].get('source')
+    if not payload.source_asset_id:
+        raise HTTPException(409, 'Assign a Source before generating Pseudo labels')
+    try:
+        workflow.artifact(repo, project_id, 'source', payload.source_asset_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     return jobs.create(
         "pseudo_label",
         world_models.run_yolo_world_pseudo_label,
@@ -717,27 +737,36 @@ def create_pseudo_label_run(project_id: str, payload: PseudoLabelRunCreate) -> d
         payload.merge_boxes,
         payload.merge_iou,
         payload.run_name,
+        filter_large_boxes=payload.filter_large_boxes,
+        max_box_area_ratio=payload.max_box_area_ratio,
+        min_box_area_ratio=payload.min_box_area_ratio,
+        area_filter_mode=payload.area_filter_mode,
         project_id=project_id,
         related_type="pseudo_label_run",
     )
 
 
 @app.get("/api/images/{image_id}/annotations")
-def list_annotations(image_id: str) -> dict[str, Any]:
+def list_annotations(image_id: str, pseudo_label_run_id: str | None = None) -> dict[str, Any]:
     image = repo.get_image(image_id)
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
-    return {"image": image, "annotations": repo.list_annotations(image_id)}
+    try:
+        annotations = repo.review_annotations(image_id, pseudo_label_run_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"image": {**image, **({'pseudo_label_run_id': pseudo_label_run_id} if pseudo_label_run_id else {})}, "annotations": annotations}
 
 
 @app.put("/api/images/{image_id}/annotations")
-def save_annotations(image_id: str, payload: AnnotationSaveRequest) -> dict[str, Any]:
+def save_annotations(image_id: str, payload: AnnotationSaveRequest, pseudo_label_run_id: str | None = None) -> dict[str, Any]:
     try:
         return project_services.save_image_annotations(
             repo,
             image_id=image_id,
             annotations=[item.model_dump() for item in payload.annotations],
             review_status=payload.review_status,
+            pseudo_label_run_id=pseudo_label_run_id,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -820,6 +849,26 @@ def list_pseudo_label_runs(project_id: str) -> list[dict[str, Any]]:
     return repo.list_pseudo_label_runs(project_id)
 
 
+@app.get('/api/projects/{project_id}/pseudo-area-distribution')
+def pseudo_area_distribution(project_id: str, source_asset_id: str) -> dict[str, Any]:
+    import json
+    from .box_area import area_distribution
+    source = repo.get_source_asset(source_asset_id)
+    if not source or source['project_id'] != project_id:
+        raise HTTPException(404, 'Source not found')
+    latest = next((run for run in repo.list_pseudo_label_runs(project_id) if run.get('source_asset_id') == source_asset_id), None)
+    if latest and latest.get('area_histogram_json'):
+        return {**json.loads(latest['area_histogram_json']), 'run_id': latest['id'], 'run_name': latest.get('run_name')}
+    images = [image for image in repo.list_images(project_id, source_asset_id=source_asset_id, limit=100000)
+              if not image.get('augmentation_run_id') and image.get('source_origin') != 'open_data']
+    areas = []
+    for image in images:
+        use_snapshot = latest and (image.get('pseudo_label_run_id') == latest['id'] or repo.db.execute('select 1 from pseudo_image_snapshots where run_id = ? and image_id = ?', (latest['id'], image['id'])).fetchone())
+        annotations = repo.review_annotations(image['id'], latest['id']) if use_snapshot else repo.list_annotations(image['id'])
+        areas.extend(annotation['width'] * annotation['height'] for annotation in annotations)
+    return {**area_distribution(areas), 'pre_filter': False, 'run_id': latest['id'] if latest else None, 'run_name': latest.get('run_name') if latest else None}
+
+
 @app.post("/api/projects/{project_id}/dataset-splits")
 def create_dataset_split(project_id: str, payload: DatasetSplitCreate) -> dict[str, Any]:
     if not repo.get_project(project_id):
@@ -831,7 +880,8 @@ def create_dataset_split(project_id: str, payload: DatasetSplitCreate) -> dict[s
             if composition is None:
                 raise FileNotFoundError("Composition not found")
             recipe = workflow.validate_recipe(repo, project_id, composition)
-            for field, value in recipe.items():
+            for field in workflow.FIELDS.values():
+                value = recipe[field]
                 setattr(payload, field, value)
         project_services.validate_dataset_split_augmentation(
             repo,

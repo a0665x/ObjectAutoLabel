@@ -1,4 +1,6 @@
 import {useUiText} from '../uiText';
+import {canReuseFromImage,reuseAnnotations} from '../components/review/reuseAnnotations';
+import {useWorkflow} from '../workflow/WorkflowState';
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, LoaderCircle } from "lucide-react";
 
@@ -55,6 +57,7 @@ type AnnotationSelection = {
 };
 
 type RemovalPhase = "removing" | "restoring" | null;
+type SavedReuseLabels = {scope:string;image:ProjectImage;annotations:Annotation[]};
 
 const EMPTY_STATS: ReviewStats = {
   unreviewed: 0,
@@ -88,7 +91,9 @@ function filteredQueueKey(projectId: string, filters: ImageFilters): string {
     filters.has_low_confidence ?? null,
     filters.source_asset_id ?? null,
     filters.source_origin ?? null,
-    filters.source_groups ?? null
+    filters.source_groups ?? null,
+    filters.pseudo_label_run_id ?? null,
+    filters.augmentation_run_id ?? null
   ]);
 }
 
@@ -128,12 +133,16 @@ function annotationsMatch(left: Annotation[], right: Annotation[]): boolean {
 
 export function ReviewPage({ project, t, onDirtyChange, initialFilters }: ReviewPageProps) {
   const ui = useUiText();
+  const runtime=useWorkflow();
+  const pseudoId=runtime?runtime.state?.assignments.pseudo??'':undefined;
+  const augmentId=runtime?runtime.state?.assignments.augmentation??'':undefined;
   const [sources, setSources] = useState<SourceAsset[]>([]);
   const [openDataImport, setOpenDataImport] = useState<OpenDataImport | null>(null);
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [stats, setStats] = useState<ReviewStats>(EMPTY_STATS);
   const statsRequestRef = useRef(0);
-  const [filters, setFilters] = useState<ImageFilters>(() => ({ ...DEFAULT_REVIEW_FILTERS, ...initialFilters }));
+  const [baseFilters, setFilters] = useState<ImageFilters>(() => ({ ...DEFAULT_REVIEW_FILTERS, ...initialFilters }));
+  const filters=useMemo<ImageFilters>(()=>({...baseFilters,...(runtime?{pseudo_label_run_id:pseudoId,augmentation_run_id:augmentId}: {})}),[baseFilters,pseudoId,augmentId,Boolean(runtime)]);
   const [images, setImages] = useState<ProjectImage[]>([]);
   const [sourceCounts, setSourceCounts] = useState({ pseudo: 0, augment: 0, open_data: 0 });
   const [bboxDistribution, setBboxDistribution] = useState<BboxHistogramClass[]>([]);
@@ -163,6 +172,8 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
   historyRef.current = history;
   const [selectedClassId, setSelectedClassId] = useState<number | null>(null);
   const [mode, setMode] = useState<"select" | "draw" | "pan">("select");
+  const [mergeIouThreshold,setMergeIouThreshold]=useState(.8);
+  const [reuseNotice,setReuseNotice]=useState<{key:string;values?:Record<string,string|number>}>({key:''});
   const [zoom, setZoom] = useState(1);
   const [reviewStatus, setReviewStatus] = useState<ReviewStatus>("reviewed");
   const reviewStatusRef = useRef(reviewStatus);
@@ -173,6 +184,7 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
   const [loadingAnnotations, setLoadingAnnotations] = useState(false);
   const [prefetching, setPrefetching] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [refreshingSavedQueue,setRefreshingSavedQueue]=useState(false);
   const [removalPhase, setRemovalPhase] = useState<RemovalPhase>(null);
   const removalBusyRef = useRef(false);
   const removalGenerationRef = useRef(0);
@@ -186,6 +198,13 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
   const imagePreloadCache = useRef(new Set<string>());
   const image = useMemo(() => images.find((item) => item.id === activeImageId) ?? null, [activeImageId, images]);
   const currentIndex = image ? images.findIndex((item) => item.id === image.id) : -1;
+  const reviewScopeKey=JSON.stringify([project.id,pseudoId??null,augmentId??null]);
+  const reviewScopeRef=useRef(reviewScopeKey);
+  reviewScopeRef.current=reviewScopeKey;
+  const [recentSavedLabels,setRecentSavedLabels]=useState<SavedReuseLabels[]>([]);
+  const [previousLabels,setPreviousLabels]=useState<{targetId:string;previousId:string;queueKey:string;annotations:Annotation[]}|null>(null);
+  const [loadingPreviousLabels,setLoadingPreviousLabels]=useState(false);
+  const [previousLabelsError,setPreviousLabelsError]=useState(false);
   const selectedId = selection.activeId;
   const selectedIds = selection.ids;
   const selectedAnnotation = useMemo(
@@ -204,9 +223,32 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
     has_low_confidence: filters.has_low_confidence,
     source_asset_id: filters.source_asset_id,
     source_origin: filters.source_origin,
-    source_groups: filters.source_groups
-  }), [filters.has_low_confidence, filters.review_status, filters.source_asset_id, filters.source_origin, filters.source_groups]);
+    source_groups: filters.source_groups,
+    pseudo_label_run_id:pseudoId,augmentation_run_id:augmentId
+  }), [filters.has_low_confidence, filters.review_status, filters.source_asset_id, filters.source_origin, filters.source_groups,pseudoId,augmentId]);
   const currentQueueKey = filteredQueueKey(project.id, positionFilters);
+
+  useEffect(()=>{
+    let ignore=false;setPreviousLabels(null);setPreviousLabelsError(false);setLoadingPreviousLabels(false);
+    if(!image||loadedQueueKey!==currentQueueKey)return;
+    const recent=recentSavedLabels.find(saved=>saved.scope===reviewScopeKey&&saved.image.id!==image.id&&canReuseFromImage(image,saved.image));
+    if(recent){setPreviousLabels({targetId:image.id,previousId:recent.image.id,queueKey:currentQueueKey,annotations:recent.annotations});return;}
+    const targetId=image.id;
+    setLoadingPreviousLabels(true);
+    async function findPrevious(){
+      for(let index=currentIndex-1;index>=0;index--){
+        const candidate=images[index];
+        if(ignore||!canReuseFromImage(image!,candidate))return;
+        const value=annotationCache.current.get(candidate.id)??await api.annotations(candidate.id,!candidate.augmentation_run_id&&candidate.source_origin!=='open_data'?pseudoId:undefined);
+        if(ignore)return;
+        if(value.image.id!==candidate.id)throw new Error('Unexpected previous image');
+        if(!value.annotations.length)continue;
+        setPreviousLabels({targetId,previousId:candidate.id,queueKey:currentQueueKey,annotations:value.annotations});return;
+      }
+    }
+    findPrevious().catch(()=>{if(!ignore)setPreviousLabelsError(true);}).finally(()=>{if(!ignore)setLoadingPreviousLabels(false);});
+    return ()=>{ignore=true;};
+  },[image?.id,currentIndex,images,currentQueueKey,loadedQueueKey,pseudoId,recentSavedLabels,reviewScopeKey]);
 
   const selectActiveImage = useCallback((imageId: string | null) => {
     if (activeImageIdRef.current === imageId) return;
@@ -216,6 +258,15 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
     activeImageIdRef.current = imageId;
     setActiveImageId(imageId);
   }, []);
+
+  useEffect(()=>{
+    annotationCache.current.clear();
+    pendingHistoryRestore.current=null;
+    setHistory({past:[],future:[]});
+    setClipboard([]);
+    setRecentSavedLabels([]);
+    selectActiveImage(null);
+  },[project.id,pseudoId,augmentId,selectActiveImage]);
 
   const updateLiveAnnotations = useCallback((nextAnnotations: Annotation[]) => {
     const clipped = nextAnnotations.map(clipAnnotation);
@@ -244,13 +295,15 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
 
   useEffect(() => {
     onDirtyChange?.(dirty);
-  }, [dirty, onDirtyChange]);
+    runtime?.setReviewDirty(dirty);
+  }, [dirty, onDirtyChange,runtime?.setReviewDirty]);
 
   useEffect(() => {
     return () => {
       onDirtyChange?.(false);
+      runtime?.setReviewDirty(false);
     };
-  }, [onDirtyChange]);
+  }, [onDirtyChange,runtime?.setReviewDirty]);
 
   const refreshStats = useCallback(async () => {
     const generation = statsRequestRef.current + 1;
@@ -262,14 +315,16 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
   useEffect(() => {
     let ignore = false;
 
-    Promise.all([api.sources(project.id), api.classSchemas(project.id), api.activeOpenDataImport(project.id), api.reviewSourceCounts(project.id)])
+    Promise.all([api.sources(project.id), api.classSchemas(project.id), api.activeOpenDataImport(project.id), api.reviewSourceCounts(project.id,filters)])
       .then(([nextSources, schemas, nextOpenDataImport, nextSourceCounts]) => {
         if (ignore) return;
         setSources(nextSources);
         setSourceCounts(nextSourceCounts);
         setOpenDataImport(nextOpenDataImport);
-        setClasses(schemas[0]?.classes ?? []);
-        setSelectedClassId((current) => current ?? schemas[0]?.classes[0]?.class_id ?? null);
+        const schemaId=runtime?.state?.catalog.pseudo.find(version=>version.id===pseudoId)?.settings.schema_id;
+        const schema=schemas.find(schema=>schema.id===schemaId)??schemas[0];
+        setClasses(schema?.classes ?? []);
+        setSelectedClassId((current) => schema?.classes.some(item=>item.class_id===current)?current:schema?.classes[0]?.class_id??null);
       })
       .catch((reason: unknown) => {
         if (ignore) return;
@@ -279,7 +334,7 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
     return () => {
       ignore = true;
     };
-  }, [project.id]);
+  }, [project.id,pseudoId,augmentId]);
 
   useEffect(() => {
     let ignore = false;
@@ -290,7 +345,7 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
     setLoadedQueueKey(null);
     setError(null);
 
-    Promise.all([api.images(project.id, filters), api.reviewSourceCounts(project.id)])
+    Promise.all([api.images(project.id, filters), api.reviewSourceCounts(project.id,filters)])
       .then(([items, nextSourceCounts]) => {
         if (ignore || queueRequestGenerationRef.current !== queueGeneration) return;
         setImages(items);
@@ -322,13 +377,13 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
   useEffect(() => {
     let ignore = false;
     setHistogramLoading(true);
-    api.bboxHistogram(project.id, { source_groups: filters.source_groups })
+    api.bboxHistogram(project.id, { source_groups: filters.source_groups,pseudo_label_run_id:pseudoId,augmentation_run_id:augmentId })
       .then((rows) => { if (!ignore) setBboxDistribution(rows); })
       .catch((reason: unknown) => { if (!ignore) setError(reason instanceof Error ? reason.message : "Failed to load bbox distribution."); })
       .finally(() => { if (!ignore) setHistogramLoading(false); });
     setActiveAreaBin(null);
     return () => { ignore = true; };
-  }, [filters.source_groups, project.id]);
+  }, [filters.source_groups, project.id,pseudoId,augmentId]);
 
   useEffect(() => {
     const key = imagePositionKey(project.id, activeImageId, positionFilters);
@@ -341,6 +396,7 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
 
     const activeImageIsInLoadedQueue = Boolean(
       activeImageId &&
+      !refreshingSavedQueue &&
       loadedQueueKey === currentQueueKey &&
       !locallyExcludedImageIds.has(activeImageId) &&
       images.some((candidate) => candidate.id === activeImageId)
@@ -375,7 +431,7 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
         };
       }
     };
-  }, [activeImageId, currentQueueKey, images, loadedQueueKey, locallyExcludedImageIds, positionFilters, project.id]);
+  }, [activeImageId, currentQueueKey, images, loadedQueueKey, locallyExcludedImageIds, positionFilters, project.id,refreshingSavedQueue]);
 
   useEffect(() => {
     if (locallyExcludedImageIds.size === 0) return;
@@ -386,7 +442,7 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
   }, [activeImageId, locallyExcludedImageIds]);
 
   useEffect(() => {
-    if (!image) {
+    if (!image || (runtime && loadedQueueKey !== currentQueueKey)) {
       readyImageIdRef.current = null;
       setReadyImageId(null);
       updateLiveAnnotations([]);
@@ -430,7 +486,7 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
       return;
     }
 
-    api.annotations(image.id)
+    api.annotations(image.id,!image.augmentation_run_id&&image.source_origin!=='open_data'?pseudoId:undefined)
       .then((result) => {
         if (ignore) return;
         if (result.image.id !== image.id) throw new Error("The server returned annotations for an unexpected image.");
@@ -457,7 +513,7 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
     return () => {
       ignore = true;
     };
-  }, [image?.id, updateLiveAnnotations, updateSelectedAnnotations]);
+  }, [image?.id,pseudoId,augmentId,loadedQueueKey,currentQueueKey, updateLiveAnnotations, updateSelectedAnnotations]);
 
   useEffect(() => {
     if (!images.length || currentIndex < 0) return;
@@ -467,7 +523,7 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
     setPrefetching(true);
     Promise.allSettled(candidates.map(async (candidate) => {
       if (!annotationCache.current.has(candidate.id)) {
-        const result = await api.annotations(candidate.id);
+        const result = await api.annotations(candidate.id,!candidate.augmentation_run_id&&candidate.source_origin!=='open_data'?pseudoId:undefined);
         if (!cancelled) annotationCache.current.set(candidate.id, result);
       }
       if (!imagePreloadCache.current.has(candidate.path)) {
@@ -485,7 +541,7 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
     return () => {
       cancelled = true;
     };
-  }, [currentIndex, images]);
+  }, [currentIndex, images,pseudoId,augmentId]);
 
   useEffect(() => {
     const availableIds = new Set(annotations.map((item) => item.id));
@@ -535,6 +591,18 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
     updateSelectedAnnotations([], null);
     setContextMenu(null);
   }, [annotations, bulkSelectionIds, commitAnnotationList, updateSelectedAnnotations]);
+
+  const hasPreviousLabels=Boolean(previousLabels&&previousLabels.targetId===image?.id&&previousLabels.queueKey===currentQueueKey&&previousLabels.annotations.some(box=>classes.some(item=>item.class_id===box.class_id)));
+  const reuseTitle=ui('Reuse the most recently saved labels in the same Source/version. Same-class IoU > {threshold} keeps current-image boxes unchanged. Check, then Save.',{threshold:mergeIouThreshold.toFixed(2)});
+  const reuseStatus=reuseNotice.key?ui(reuseNotice.key,reuseNotice.values):loadingPreviousLabels?ui('Loading recent labels…'):previousLabelsError?ui('Could not load previous labels. Reload this image to retry.'):image&&readyImageId===image.id&&!hasPreviousLabels?ui('No earlier compatible labels in this Source/version. Save a labeled frame first.'):'';
+  const reusePreviousLabels=useCallback(()=>{
+    if(!hasPreviousLabels||!previousLabels||!image||saving||removalBusyRef.current||readyImageIdRef.current!==image.id)return;
+    const result=reuseAnnotations(annotations,previousLabels.annotations,annotationId,new Set(classes.map(item=>item.class_id)),mergeIouThreshold);
+    setReuseNotice({key:'Reused {added} boxes · skipped {overlaps} overlaps · {unsupported} incompatible boxes.',values:{added:result.selectedIds.length,overlaps:result.skippedOverlaps,unsupported:result.skippedUnsupported}});
+    if(!result.selectedIds.length||!commitAnnotationList(result.annotations))return;
+    updateSelectedAnnotations(result.selectedIds,result.selectedIds[0]);setContextMenu(null);
+  },[hasPreviousLabels,previousLabels,image,saving,annotations,classes,commitAnnotationList,updateSelectedAnnotations,mergeIouThreshold]);
+  useEffect(()=>{setReuseNotice({key:''});},[image?.id,currentQueueKey]);
 
   const relabelSelectedAnnotations = useCallback((classItem: ClassItem, ids = bulkSelectionIds) => {
     if (removalBusyRef.current || !ids.length) return;
@@ -629,7 +697,7 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
 
   const handleMergeSameClass = useCallback(() => {
     if (removalBusyRef.current) return;
-    const value = window.prompt(ui("Merge same-class boxes with IoU >="), "0.75");
+    const value = window.prompt(ui("Merge same-class boxes with IoU >="), String(mergeIouThreshold));
     if (value === null) return;
     const threshold = Number(value);
     if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
@@ -637,12 +705,13 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
       return;
     }
     if (!image) return;
+    setMergeIouThreshold(threshold);
     replaceAnnotationsWithoutHistory(
       image.id,
       annotationReducer(annotations, { type: "mergeSameClass", iouThreshold: threshold })
     );
     updateSelectedAnnotations([], null);
-  }, [annotations, image, replaceAnnotationsWithoutHistory, updateSelectedAnnotations, ui]);
+  }, [annotations, image, replaceAnnotationsWithoutHistory, updateSelectedAnnotations, ui,mergeIouThreshold]);
 
   const persistAnnotations = useCallback(async (advanceToNext = false) => {
     if (removalBusyRef.current || !image) return;
@@ -657,15 +726,23 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
     setSaving(true);
     setError(null);
     try {
-      const result = await api.saveAnnotations(sourceImageId, {
+      const payload = {
         annotations: submittedAnnotations,
         review_status: submittedReviewStatus
-      });
+      };
+      const snapshotId=!sourceImage.augmentation_run_id&&sourceImage.source_origin!=='open_data'?pseudoId:undefined;
+      const result = snapshotId?await api.saveAnnotations(sourceImageId,payload,snapshotId):await api.saveAnnotations(sourceImageId,payload);
       const serverNormalizedAnnotations = !annotationsMatch(result.annotations, submittedAnnotations);
       annotationCache.current.set(sourceImageId, {
         image: { ...sourceImage, review_status: savedReviewStatus },
         annotations: result.annotations
       });
+      if(reviewScopeRef.current===reviewScopeKey){
+        setRecentSavedLabels(current=>{
+          const retained=current.filter(saved=>saved.image.id!==sourceImageId);
+          return result.annotations.length?[{scope:reviewScopeKey,image:sourceImage,annotations:result.annotations},...retained].slice(0,32):retained;
+        });
+      }
       if (serverNormalizedAnnotations) resetAnnotationHistory(sourceImageId);
       const stillOnSource =
         activeImageIdRef.current === sourceImageId &&
@@ -690,7 +767,9 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
           generation: positionRequestRef.current.generation + 1,
           key: ""
         };
-        setLoadedQueueKey(null);
+        // A metadata refresh is not an assignment/filter change. Keep the
+        // loaded annotations alive so they cannot be mistaken for newer edits.
+        setRefreshingSavedQueue(true);
         setImagePosition(null);
       }
       setImages((current) =>
@@ -744,9 +823,10 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : "Failed to save annotations.");
     } finally {
+      setRefreshingSavedQueue(false);
       setSaving(false);
     }
-  }, [annotations, changeReviewStatus, filters, image, images, project.id, refreshStats, resetAnnotationHistory, reviewStatus, selectActiveImage, updateLiveAnnotations]);
+  }, [annotations, changeReviewStatus, filters, image, images, project.id, refreshStats, resetAnnotationHistory, reviewStatus, selectActiveImage, updateLiveAnnotations,reviewScopeKey]);
 
   const confirmReviewNavigation = useCallback(() => shouldProceedWithReviewNavigation(dirty, message => window.confirm(ui(message))), [dirty, ui]);
 
@@ -848,6 +928,7 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
       if (removalGenerationRef.current !== generation) return;
 
       annotationCache.current.delete(sourceImage.id);
+      setRecentSavedLabels(current=>current.filter(saved=>saved.image.id!==sourceImage.id));
       imagePreloadCache.current.delete(sourceImage.path);
       invalidateQueuePosition();
       const remainingImages = imagesRef.current.filter((candidate) => candidate.id !== sourceImage.id);
@@ -1031,6 +1112,7 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
     imageReady: Boolean(image && readyImageId === image.id),
     hasSelection: bulkSelectionIds.length > 0,
     hasClipboard: clipboard.length > 0,
+    hasPreviousLabels,
     canUndo: history.past.length > 0,
     canRedo: history.future.length > 0,
     saving,
@@ -1039,6 +1121,7 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
       setTool: setMode,
       copy: copySelectedAnnotations,
       paste: pasteClipboardAnnotations,
+      reusePrevious: reusePreviousLabels,
       duplicate: duplicateSelectedAnnotations,
       delete: deleteSelectedAnnotations,
       relabel: () => {
@@ -1055,6 +1138,8 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
     bulkSelectionIds,
     cancelReview,
     clipboard.length,
+    hasPreviousLabels,
+    reusePreviousLabels,
     copySelectedAnnotations,
     deleteSelectedAnnotations,
     duplicateSelectedAnnotations,
@@ -1124,6 +1209,7 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
           filters={filters}
           stats={stats}
           sourceCounts={sourceCounts}
+          sourceVersions={runtime?{pseudo:runtime.state?.catalog.pseudo.find(v=>v.id===pseudoId)?.name??null,augment:runtime.state?.catalog.augmentation.find(v=>v.id===augmentId)?.name??null}:undefined}
           sources={sources}
           openDataImport={openDataImport}
           loading={loadingImages}
@@ -1156,6 +1242,8 @@ export function ReviewPage({ project, t, onDirtyChange, initialFilters }: Review
       </div>
       <div className="review-main">
         <AnnotationToolbar
+          reuseTitle={reuseTitle}
+          reuseStatus={reuseStatus}
           mode={mode}
           commands={commands}
           editMenuOpen={editMenuOpen}

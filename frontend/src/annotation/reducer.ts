@@ -35,7 +35,7 @@ function toBox(annotation: Annotation): { x1: number; y1: number; x2: number; y2
   };
 }
 
-function annotationIou(first: Annotation, second: Annotation): number {
+export function annotationIou(first: Annotation, second: Annotation): number {
   const a = toBox(first);
   const b = toBox(second);
   const ix1 = Math.max(a.x1, b.x1);

@@ -34,6 +34,7 @@ class ApiJob(BaseModel):
 class SourceCreate(BaseModel):
     kind: str
     path: str = Field(min_length=1)
+    allow_duplicate: bool = False
 
 
 class SourceAnalysisRequest(BaseModel):
@@ -67,6 +68,16 @@ class PseudoLabelRunCreate(BaseModel):
     iou: float = Field(0.7, ge=0, le=1)
     merge_boxes: bool = False
     merge_iou: float = Field(0.75, ge=0, le=1)
+    filter_large_boxes: bool = False
+    max_box_area_ratio: float = Field(1 / 3, gt=0, le=1)
+    min_box_area_ratio: float = Field(0, ge=0, lt=1)
+    area_filter_mode: Literal['manual', 'auto'] = 'manual'
+
+    @model_validator(mode='after')
+    def valid_area_range(self):
+        if self.min_box_area_ratio >= self.max_box_area_ratio:
+            raise ValueError('Minimum box area must be smaller than maximum box area')
+        return self
 
 
 class AnnotationUpdateItem(BaseModel):

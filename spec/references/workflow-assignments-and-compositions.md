@@ -12,13 +12,42 @@ not the underlying saved build. Upstream changes clear dependent assignments.
 Existing deletion actions remain available. Split has no duplicate Assign footer;
 its detailed history is collapsed beneath Saved Splits.
 
-Split's composition board accepts one Pseudo source, one optional Augment
-built from that source, and one optional Open Data version. Augment replaces
-the raw Pseudo image set; it is not added a second time. Open Data is additive
+Source history also supports persisted `source` assignment. Each row shows the
+registered folder/video basename, original-image count, path, timestamp and id.
+Registration does not implicitly assign a new source. Videos without extracted
+frames and sources with active extraction are unavailable for Pseudo generation.
+The Pseudo input selector changes the same assignment and Generate passes its
+concrete `source_asset_id`; no selected source disables Generate. API callers may
+omit the id only when a valid persisted Source assignment exists; otherwise the
+request returns 409 before creating a job. The worker revalidates that source.
+Changing Source clears downstream Pseudo/Augment/Split/Train/Convert assignments
+and the active recipe, while preserving saved artifacts and Open Data. Reassigning
+the same Source is a no-op. Assigning a source-specific saved Pseudo/Augment also
+restores its Source parent; legacy all-source Pseudo runs cannot infer one parent.
+Source analysis and catalog counts exclude Augment/Open Data derived images.
+
+Source history also offers confirmed Delete history: only that version's copied
+images and dependent downstream history are removed, never original input or
+unrelated versions. Active project jobs block deletion. Reprocessing the same
+resolved path/kind first asks whether to intentionally create another version.
+Pseudo's shared footer is now its sole run-history/delete surface; the duplicate
+Previous pseudo-label runs list is removed. New runs may opt into post-merge
+large-box filtering, with an adjustable one-third default area threshold and
+persisted removed-box count.
+
+Split's composition board accepts one or more parallel Pseudo → optional Augment
+groups and one shared optional Open Data version. Each group's Augment replaces
+its raw Pseudo image set; it is not added a second time. Groups are summed, and Open Data is additive
 and keeps upstream train/validation membership. Select versions directly with
 keyboard/touch buttons in an interactive processing flow. Modules show names,
 counts, timestamps and processing settings. Selecting Augment supplies its
-recorded Pseudo parent; changing Pseudo clears a previously selected Augment.
+recorded Pseudo parent; changing Pseudo clears only that group's previously selected Augment.
+`Add Pseudo → Augment group` adds a parallel row and opens its Pseudo picker.
+Removing a group changes only the Split draft. Cards, version pickers, short
+transitions and source inspectors retain their existing interaction patterns.
+One source version cannot be included twice; overlapping raw originals across
+Pseudo versions are rejected during materialization rather than silently given
+conflicting labels. Select distinct sources or retained Augment outputs instead.
 
 The Split page follows **select source cards → set ratios → build**. Only the
 current project's Pseudo/Augment/Open Data versions appear here, not every
@@ -78,20 +107,31 @@ Split and open Train, without starting a training job. Train and downstream mode
 honor explicit runtime assignments rather than silently replacing them with
 the newest output.
 
-Review remains a live annotation workbench. Its footer assigns a Pseudo output
-for downstream use; it does not replace the live review queue with a historical
-snapshot. New Pseudo runs preserve annotation snapshots for historical
-Augment/Split input. Review saves update the currently attached Pseudo snapshot.
+Review follows the project assignments from the Pseudo and Augment tabs. Its
+Pseudo and Augment Image Map groups each show only the assigned version, with
+its name and available count; an unassigned group is disabled. Open Sources
+still shows the Review-active Open Data import. Selecting Augment assigns its
+recorded Pseudo parent; changing Pseudo clears an incompatible Augment assignment.
+The scoped queue, position, confidence colors and histogram use the same inputs.
+Pseudo review loads the selected run's retained annotation snapshot. Saving an
+older Pseudo updates only that snapshot and its version-local reviewed labels,
+preserving the live annotations attached to another run. Switching assignments
+clears annotation caches and session history, and dirty edits require confirmation.
+New Pseudo runs preserve annotation snapshots for historical Augment/Split input.
 Legacy runs whose originals were already overwritten cannot be reconstructed;
 choose a retained Augment build or regenerate Pseudo when the API reports this.
 
 ## Persistence and validation
 
 - `workflow_states`: project-keyed assignment JSON and assigned composition id.
-- `dataset_compositions`: named recipe with explicit Pseudo, Augment and Open
-  Data ids. Recipes are immutable; create another to change the inputs.
+- `dataset_compositions`: named recipe with `branches_json` containing ordered
+  Pseudo/Augment pairs and one `open_data_import_id`. Legacy scalar columns retain
+  the first pair, and old recipes with null `branches_json` remain readable.
+  Recipes are immutable; create another to change the inputs.
 - `dataset_splits.composition_id` / `composition_json`: origin recipe id and
-  immutable recipe metadata. Deleting a recipe preserves built splits.
+  immutable recipe metadata, including every branch's ids, saved names and counts.
+  Deleting a recipe preserves built splits. Deleting any upstream branch follows
+  the full snapshot to find dependent Split/Train/Convert/Export history.
 - `pseudo_image_snapshots`: annotations keyed by Pseudo run and source image.
   Snapshot lookup excludes removed images and all Augment/Open Data inputs.
 
@@ -113,14 +153,70 @@ into all runtime state, recipes and Pseudo snapshots.
 
 - `GET /api/projects/{id}/workflow-state`: assignments, catalog and combinations.
 - `PUT /api/projects/{id}/workflow-state`: `{stage, artifact_id}`; null clears.
-- `POST /api/projects/{id}/compositions`: name and three optional input ids;
+  `stage: "source"` assigns one registered input source.
+- `POST /api/projects/{id}/compositions`: name, optional `branches` array of
+  `{pseudo_label_run_id, augmentation_run_id}` pairs (up to 32), and one optional
+  `open_data_import_id`; the legacy three scalar input ids remain supported;
   returns updated runtime state and assigns the new recipe.
 - `POST /api/projects/{id}/compositions/{id}/assign`: restore a saved recipe.
 - `DELETE /api/projects/{id}/compositions/{id}`: remove the recipe only.
 - `POST /api/projects/{id}/dataset-splits`: optional `composition_id` resolves
   the recipe server-side; legacy explicit-id callers remain supported.
+- Review image list/position/source-count/histogram endpoints accept optional
+  `pseudo_label_run_id` and `augmentation_run_id`. An empty id explicitly selects
+  no version; omitting the query retains the legacy unscoped behavior.
+- Annotation GET/PUT accept `pseudo_label_run_id` to read/save the selected
+  Pseudo snapshot. Project membership and retained-image membership are validated.
 
 ## Verification
+
+2026-10-13 histogram-range and Reuse acceptance: 313 frontend tests, 486 backend
+tests and the production bundle passed. Coverage includes dominant large-mode
+separation/fallback, inclusive manual bounds, raw distribution persistence,
+source-scoped legacy fallback, fresh manual copy identities, no duplicate offsets,
+source-boundary protection, Undo and explicit Save. Mocked browser acceptance
+verified real drag of both native handles, keyboard adjustment, manual payload
+preservation across four languages/five widths, and Reuse → no-op repeat →
+Undo/Redo → Save on a missing-label next frame. Reuse aligns beside all three
+tools, and neither Pseudo nor Review overflows at 375–1440px.
+The final deployment's read-only acceptance also verified a real legacy Source's
+1,212-box retained-only histogram and all five viewport widths. Desktop toolbar
+container queries and top-bar wrapping contain the actual long-project-name case.
+No live labels were saved or generated during browser verification.
+
+2026-10-13 Source history and large-box filtering acceptance: 307 frontend tests
+passed in the single-worker regression run; the parallel run exposed an unrelated
+existing Stream seek timing flake. The production bundle and 471 backend tests
+passed. Fake inference checks cover disabled filtering, strict one-third boundary,
+custom thresholds, all-box removal with image retention, and merge/filter metrics.
+Temporary-project tests cover canonical/symlink path duplicates, explicit override,
+Source cascade, original-input/unrelated-version retention, legacy dependencies,
+active-job protection and stale deletion plans. Mocked browser acceptance covers
+duplicate cancel/confirm, source deletion/refresh, one Pseudo history surface and
+25% payload persistence across four languages and five widths (375–1440px), with
+no horizontal overflow or page errors. No live Source histories were deleted.
+
+2026-10-13 Source assignment acceptance: 303 frontend tests and production build
+passed. The backend suite passed 458 tests in the disposable runtime container;
+focused follow-up checks also cover source-only analysis and same-source no-op
+assignment. Fake-model inference processed only the selected Source and
+preserved another Source's images/annotations. Browser fixtures verified Source
+history assignment, Pseudo's selected id and custom name in the request, disabled
+Generate without a Source, empty-video rejection, preserved fields across four
+languages, and no overflow at 375/768/851/1024/1440 px. API writes were intercepted.
+Late initial history loading no longer overwrites an operator-entered Pseudo name.
+
+2026-10-13 parallel-source acceptance: 300 frontend tests and the production
+build passed. The complete backend suite passed 455 tests in a disposable
+container using the existing runtime image; host Python lacks PyTorch. Browser
+fixture acceptance verified two parallel pairs, the 4,592 + 260 + 7,019 = 11,871
+total, exact composition-to-Split submission, assignment-scoped Review requests,
+four languages, touch/keyboard selection and Escape focus return. At
+375/768/851/1024/1440 CSS pixels there was no page overflow and peer card widths
+matched; 200% root text and reduced motion also passed. Browser fixture writes
+were intercepted and did not modify production projects. Tests cover secondary
+branch deletion, schema/lineage validation, snapshot isolation and official
+Open Data bucket preservation.
 
 `tests/backend/test_workflow_state.py` covers persistence and project isolation,
 recipe validation, assignment invalidation, recipe-only deletion, API errors,

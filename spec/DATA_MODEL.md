@@ -140,13 +140,41 @@ For non-skip augmentation builds, each generated output samples the configured e
 
 Deletion follows stored lineage from upstream to downstream:
 
-`Pseudo → Augment → Split → Training → Conversion → Export`
+`Source → Pseudo → Augment → Split → Training → Conversion → Export`
 
 `Open Data import → Split → Training → Conversion → Export`
 
 The selected record and every dependent downstream record are removed in one database transaction. Associated completed jobs are removed, Current Split falls back to the newest remaining Split, and generated Augment or imported Open Data image rows are deleted with their annotations. The Open Data import's shared `project_dir` download cache is retained. Filesystem cleanup is restricted to unshared child directories beneath project-owned `pseudo_labels/`, `augmentations/`, `splits/`, and `output_model/{runs,conversions,exports}/`. Training cleanup removes the run-specific Ultralytics `save_dir`, never the shared `output_model/runs` parent. A path still referenced by another record is retained.
 
+Source deletion additionally removes only `sources/<source_id>/` and its image
+records, discovers legacy dependencies through retained image snapshots, and
+protects other Source versions even when their original input path is identical.
+All project jobs must be inactive; dependency changes between planning and the
+transaction reject deletion. The original input folder/video is never removed.
+
+`pseudo_label_runs` additively migrates `filter_large_boxes` (default false),
+`max_box_area_ratio` (default one third), and `filtered_box_count` (default zero).
+The subsequent range migration adds `min_box_area_ratio` (zero),
+`area_filter_mode` (`manual` for compatibility), and nullable `area_histogram_json`.
+This JSON keeps 50 log1p-spaced area bins, candidate count and suggested maximum
+before filtering; old histories remain null rather than inventing removed boxes.
+Filtering changes only new inference results, after merge and before final
+annotation, filtered preview and snapshot persistence; merge metrics remain
+independent of filtering. Intermediate job previews show candidate detections.
+Candidate JSON files are staged per image under the new run's `_candidates/`,
+then removed after successful persistence; images are not held in memory.
+
 ## Shared workflow assignments
+
+`workflow_states.assignments_json.source` stores a registered `source_assets.id`.
+Each new Pseudo run keeps that id in `pseudo_label_runs.source_asset_id`; inference
+uses only that source's active original images. No schema migration is needed for
+Source assignment. Legacy Pseudo runs with null source ids keep their saved lineage.
+
+Dataset compositions support multiple ordered Pseudo/Augment pairs in
+`branches_json`, plus one shared Open Data version. Existing scalar columns
+remain compatible and represent the first pair. Split `composition_json` freezes
+every pair's lineage, names and counts for downstream selectors and deletion.
 
 Project assignments, saved dataset combinations, draggable Split recipes and
 Pseudo annotation snapshots are described in

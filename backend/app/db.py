@@ -411,6 +411,12 @@ def initialize_schema(db: sqlite3.Connection) -> None:
         "alter table pseudo_label_runs add column merge_rate real not null default 0",
         "alter table pseudo_label_runs add column last_image_path text",
         "alter table pseudo_label_runs add column run_name text",
+        "alter table pseudo_label_runs add column filter_large_boxes integer not null default 0",
+        "alter table pseudo_label_runs add column max_box_area_ratio real not null default 0.3333333333333333",
+        "alter table pseudo_label_runs add column filtered_box_count integer not null default 0",
+        "alter table pseudo_label_runs add column min_box_area_ratio real not null default 0",
+        "alter table pseudo_label_runs add column area_filter_mode text not null default 'manual'",
+        "alter table pseudo_label_runs add column area_histogram_json text",
         "alter table images add column augmentation_run_id text",
         "alter table images add column removed_at text",
         "alter table images add column removal_operation_id text",
@@ -558,6 +564,9 @@ def initialize_schema(db: sqlite3.Connection) -> None:
         );
     """)
     split_columns = {row["name"] for row in db.execute("pragma table_info(dataset_splits)").fetchall()}
+    composition_columns = {row["name"] for row in db.execute("pragma table_info(dataset_compositions)").fetchall()}
+    if "branches_json" not in composition_columns:
+        db.execute("alter table dataset_compositions add column branches_json text")
     for name in ("composition_id", "composition_json"):
         if name not in split_columns:
             db.execute(f"alter table dataset_splits add column {name} text")

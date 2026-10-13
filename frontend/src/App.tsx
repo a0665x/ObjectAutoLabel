@@ -2,6 +2,8 @@ import {useUiText, uiText, UiLanguageProvider} from './uiText';
 import { WorkflowProvider, AssignmentFooter, useWorkflow } from "./workflow/WorkflowState";
 import { CompositionBoard } from "./workflow/CompositionBoard";
 import { VersionInspector } from './workflow/VersionInspector';
+import {BoxAreaRange} from './components/BoxAreaRange';
+import type {BoxAreaDistribution} from './api/client';
 import { recipeIssue } from './workflow/composition';
 import {workflowText} from './workflow/text';
 import {WorkflowError} from './workflow/WorkflowError';
@@ -39,7 +41,7 @@ import {
   UserRound,
   X
 } from "lucide-react";
-import { api, type AugmentationPreviewSample, type FileBrowserResult, type FileBrowserShortcut, type SourceAnalysis, type SplitSample, type SplitSamples, type ValidationPreviewResult } from "./api/client";
+import { api, ApiError, type AugmentationPreviewSample, type FileBrowserResult, type FileBrowserShortcut, type SourceAnalysis, type SplitSample, type SplitSamples, type ValidationPreviewResult } from "./api/client";
 import { versionedBuildName } from "./artifactNaming";
 import { translate } from "./i18n";
 import { ReviewPage } from "./pages/ReviewPage";
@@ -910,8 +912,11 @@ export function shouldRefreshArtifactsAfterSourceProcessing(result: { sourceId?:
   return Boolean(result.sourceId) || Number(result.imageCount ?? 0) > 0;
 }
 
-function SourcesPage({ project, refresh, refreshArtifacts, t }: { project: Project; refresh: () => Promise<void>; refreshArtifacts: () => Promise<void>; t: (key: string) => string }) {
+export function SourcesPage({ project, refresh, refreshArtifacts, t }: { project: Project; refresh: () => Promise<void>; refreshArtifacts: () => Promise<void>; t: (key: string) => string }) {
   const ui = useUiText();
+  const runtime=useWorkflow();
+  const assignedSourceId=runtime?.state?.assignments.source;
+  const sourceVersions=runtime?.state?.catalog.source??[];
   const [sources, setSources] = useState<SourceAsset[]>([]);
   const [kind, setKind] = useState<"video" | "image_folder">("image_folder");
   const [path, setPath] = useState("");
@@ -919,6 +924,7 @@ function SourcesPage({ project, refresh, refreshArtifacts, t }: { project: Proje
   const [showBrowser, setShowBrowser] = useState(false);
   const [analysis, setAnalysis] = useState<SourceAnalysis | null>(null);
   const [processingSource, setProcessingSource] = useState(false);
+  const [sourceError,setSourceError]=useState('');
   const [sourceProgress, setSourceProgress] = useState(0);
   const [sourceStep, setSourceStep] = useState("");
   const [extractingFrames, setExtractingFrames] = useState(false);
@@ -936,15 +942,23 @@ function SourcesPage({ project, refresh, refreshArtifacts, t }: { project: Proje
         onSubmit={async (event) => {
           event.preventDefault();
           setProcessingSource(true);
+          setSourceError('');
           setSourceProgress(8);
           setSourceStep("Registering source path…");
           setAnalysis(null);
           try {
-            const source = await api.createSource(project.id, { kind, path });
+            let source:SourceAsset;
+            try{source=await api.createSource(project.id,{kind,path});}
+            catch(error){
+              if(!(error instanceof ApiError)||error.status!==409||!error.detail||typeof error.detail!=='object'||!('code' in error.detail)||error.detail.code!=='duplicate_source')throw error;
+              if(!window.confirm(ui('This Source is already registered: {path}. Create another version anyway? Cancel to use the existing Source history instead.',{path})))return;
+              source=await api.createSource(project.id,{kind,path,allow_duplicate:true});
+            }
             setSourceProgress(38);
             setSourceStep("Refreshing source list…");
             setPath("");
             setSources(await api.sources(project.id));
+            await runtime?.reload();
             setSourceProgress(68);
             setSourceStep("Analyzing image count, extensions and dimensions…");
             setAnalysis(await api.sourceAnalysis(project.id, { source_asset_id: source.id }));
@@ -956,7 +970,7 @@ function SourcesPage({ project, refresh, refreshArtifacts, t }: { project: Proje
             }
             setSourceProgress(100);
             setSourceStep("Analysis complete.");
-          } finally {
+          } catch(error){setSourceError(error instanceof Error?error.message:String(error));} finally {
             window.setTimeout(() => { setProcessingSource(false); setSourceProgress(0); setSourceStep(""); }, 250);
           }
         }}
@@ -970,6 +984,7 @@ function SourcesPage({ project, refresh, refreshArtifacts, t }: { project: Proje
         <FolderPathField value={path} mode={kind} onChange={setPath} onBrowse={() => setShowBrowser(true)} required />
         <ProcessingButton busy={processingSource} progress={sourceProgress} statusText={sourceStep || ui("Processing source…")} taskName={ui("Source analysis")} className="primary action-process"><Play size={17} />{ui("Process & analysis")}</ProcessingButton>
         {processingSource && <p className="inline-feedback">{sourceProgress}% · {sourceStep || ui("Reading files and calculating counts/sizes…")}</p>}
+        <WorkflowError message={sourceError}/>
       </form>
       {kind === "video" && <form className="panel" onSubmit={async (event) => { event.preventDefault(); setExtractingFrames(true); setExtractProgress(10); setExtractStep("Submitting frame extraction job…"); try { const form = new FormData(event.currentTarget); await api.extractFrames(project.id, { source_asset_id: sourceId, frames_per_second: Number(form.get("fps")), resize_enabled: form.get("resize") === "on", resize_width: Number(form.get("width") || 0) || null, resize_height: Number(form.get("height") || 0) || null }); setExtractProgress(75); setExtractStep("Refreshing project jobs…"); await refresh(); setExtractProgress(100); setExtractStep("Frame extraction accepted."); } finally { window.setTimeout(() => { setExtractingFrames(false); setExtractProgress(0); setExtractStep(""); }, 250); } }}>
         <h2>{t("extractFrames")}</h2>
@@ -984,8 +999,22 @@ function SourcesPage({ project, refresh, refreshArtifacts, t }: { project: Proje
         {analysis ? <SourceAnalysisPanel analysis={analysis} /> : <p className="muted">{ui("Press Process & analysis to register the source and show image count, dimensions, extensions, and size distribution.")}</p>}
       </div>
       <div className="list-panel wide">
-        <h2>{ui("Source history")}</h2>
-        {sources.map((source) => <article key={source.id} className="row-card"><strong>{ui(source.kind)}</strong><span>{source.path}</span><button type="button" className="secondary action-analyze" onClick={async () => setAnalysis(await api.sourceAnalysis(project.id, { source_asset_id: source.id }))}>{ui("Analyze this source")}</button></article>)}
+        <div className="sidebar-header"><h2>{ui("Source history")}</h2>{runtime&&<span className="assigned-badge">{ui('Assigned: {name}',{name:sourceVersions.find(version=>version.id===assignedSourceId)?.name??ui('None')})}</span>}</div>
+        {runtime&&<p className="muted">{ui('Assign one Source for Pseudo labeling. New sources remain unassigned until you choose them.')}</p>}
+        {runtime?.error&&<WorkflowError message={runtime.error}/>}
+        {sources.map((source) => {const version=sourceVersions.find(version=>version.id===source.id);return <article key={source.id} className={`row-card source-history-row ${source.id===assignedSourceId?'is-assigned':''}`}>
+          <strong>{version?.name??source.path.split('/').filter(Boolean).at(-1)} · {ui(source.kind)}</strong><span>{source.path}</span>
+          {version&&<span>{ui('{count} images',{count:version.count.toLocaleString()})} · {source.id.slice(0,8)} · {version.created_at.slice(0,16).replace('T',' ')}</span>}
+          <WorkflowError message={version?.reason}/>
+          <div className="inline-actions">{runtime&&<button type="button" className="secondary action-assign" disabled={runtime.busy||!version||Boolean(version.reason)} onClick={()=>void runtime.change(()=>api.assignWorkflow(project.id,'source',source.id))}>{ui(source.id===assignedSourceId?'Assigned':'Assign Source')}</button>}
+          <button type="button" className="secondary action-analyze" onClick={async () => setAnalysis(await api.sourceAnalysis(project.id, { source_asset_id: source.id }))}>{ui("Analyze this source")}</button>
+          <button type="button" className="secondary danger action-delete" aria-label={ui('Delete Source history {name}',{name:version?.name??source.path})} disabled={runtime?.busy||processingSource||extractingFrames} onClick={()=>{
+            if(!window.confirm(ui('Delete Source “{name}”, its copied images, and dependent Pseudo, Augment, Split, Training and Export history? The original input and shared Open Data cache are kept.',{name:version?.name??source.path})))return;
+            const remove=async()=>{await api.deleteHistory(project.id,'source',source.id);setSources(await api.sources(project.id));setAnalysis(null);if(sourceId===source.id)setSourceId('');await refresh();await refreshArtifacts();return api.workflowState(project.id);};
+            if(runtime)void runtime.change(remove);else void remove().catch(error=>setSourceError(String(error)));
+          }}>{ui('Delete history')}</button></div>
+        </article>;})}
+        {runtime&&assignedSourceId&&<button type="button" className="secondary" disabled={runtime.busy} onClick={()=>void runtime.change(()=>api.assignWorkflow(project.id,'source',null))}>{ui('Clear assignment')}</button>}
       </div>
     </section>
   );
@@ -1242,6 +1271,7 @@ export function PseudoGenerateFeedbackPanel({ submitting, submitNotice, activeJo
       </div>
       {typeof progress === "number" ? <progress value={progress} max={100} /> : null}
       <p>{ui(message)}</p>
+      {!isRunning && !submitting && latestRun?.filter_large_boxes ? <p>{ui('Filtered {count} boxes; kept area {lower}%–{upper}% of image.', {count: String(latestRun.filtered_box_count ?? 0), lower: ((latestRun.min_box_area_ratio ?? 0) * 100).toFixed(2), upper: ((latestRun.max_box_area_ratio ?? 1 / 3) * 100).toFixed(2)})}</p> : null}
       {activeJob?.error ? <p className="error-text">{activeJob.error}</p> : null}
       <div className="pseudo-settings-summary">
         <span>{ui("schema:")} <strong>{schemaName || ui("draft schema")}</strong></span>
@@ -1361,6 +1391,10 @@ function openDataVersionName(item?: OpenDataImport | null) {
   return item?.version_name || (item ? `${item.dataset_key} ${item.sample_percentage}%` : "No Open Data");
 }
 
+type SplitBranch = {pseudo_label_run_id:string|null;augmentation_run_id:string|null;pseudo_name?:string;pseudo_count?:number;augmentation_name?:string;augmentation_count?:number};
+function savedSplitBranches(split:DatasetSplitRun|Record<string,unknown>):SplitBranch[] {
+  try {const recipe=JSON.parse(String(split.composition_json??'{}'));return Array.isArray(recipe.branches)?recipe.branches:[];}catch{return [];}
+}
 export function datasetSplitOptionLabel(split: DatasetSplitRun | Record<string, unknown>, pseudoRuns: PseudoLabelRun[] = [], augmentationRuns: AugmentationRun[] = [], openDataImport?: OpenDataImport | OpenDataImport[] | null) {
   const pseudoId = String(split.pseudo_label_run_id ?? "");
   const augmentId = String(split.augmentation_run_id ?? "");
@@ -1371,7 +1405,9 @@ export function datasetSplitOptionLabel(split: DatasetSplitRun | Record<string, 
   const pseudoLabel = `[Pseudo · ${pseudoBuildName(pseudo)}]`;
   const augmentLabel = `[Augment · ${augmentationBuildName(augment)}]`;
   const openDataLabel = split.open_data_import_id ? ` + [Open Data · ${openData ? openDataVersionName(openData) : "linked import"}${openData ? ` · ${openData.selected_image_count.toLocaleString()} images` : ""}]` : "";
-  return `${pseudoLabel} → ${augmentLabel}${openDataLabel} → [Split · ${splitDisplayName(split)}${total ? ` · ${total.toLocaleString()} images` : ""}]${split.outdated ? " · Outdated — rebuild required" : ""}`;
+  const branches=savedSplitBranches(split);
+  const sources=branches.length>1?branches.map(branch=>`([Pseudo · ${branch.pseudo_name??pseudoBuildName(pseudoRuns.find(run=>run.id===branch.pseudo_label_run_id))}] → [Augment · ${branch.augmentation_name??augmentationBuildName(augmentationRuns.find(run=>run.id===branch.augmentation_run_id))}])`).join(' + '):`${pseudoLabel} → ${augmentLabel}`;
+  return `${sources}${openDataLabel} → [Split · ${splitDisplayName(split)}${total ? ` · ${total.toLocaleString()} images` : ""}]${split.outdated ? " · Outdated — rebuild required" : ""}`;
 }
 
 export function datasetSplitLineageLabel(split: DatasetSplitRun | Record<string, unknown>, pseudoRuns: PseudoLabelRun[] = [], augmentationRuns: AugmentationRun[] = [], openDataImport?: OpenDataImport | OpenDataImport[] | null) {
@@ -1389,6 +1425,15 @@ export function DatasetLineageChain({ split, pseudoRun, augmentationRun, openDat
   const augmentName=augmentationRun?augmentationBuildName(augmentationRun):w('No Augment');
   const images=(count:number)=>w('{count} images',{count:count.toLocaleString()});
   const accessible = `[${w('Pseudo')} · ${pseudoName}] → [${w('Augment')} · ${augmentName}]${matchingOpenData || split?.open_data_import_id ? ` + [${w('Open Data')} · ${matchingOpenData?.dataset_key || w("linked import")}]` : ""} → [${w('Split')} · ${splitName}${total ? ` · ${images(total)}` : ""}]`;
+  const branches=split?savedSplitBranches(split):[];
+  if(branches.length>1)return <div className="dataset-lineage" aria-label={branches.map(branch=>`${branch.pseudo_name} → ${branch.augmentation_name??w('No Augment')}`).join(' + ')+` → ${splitName}`}>
+    <div className="lineage-parallel">{branches.map((branch,index)=><div className="dataset-lineage" key={index}>
+      <span className="lineage-node lineage-pseudo">[{w('Pseudo')} · {branch.pseudo_name??w('Version unavailable')} · {w('{count} labeled',{count:(branch.pseudo_count??0).toLocaleString()})}]</span>
+      <span className="lineage-connector" aria-hidden="true">→</span><span className="lineage-node lineage-augment">[{w('Augment')} · {branch.augmentation_name??w('No Augment')}{branch.augmentation_run_id?` · ${images(branch.augmentation_count??0)}`:''}]</span>
+    </div>)}</div>
+    {matchingOpenData&&<><span className="lineage-connector">+</span><span className="lineage-node lineage-open-data">[{w('Open Data')} · {openDataVersionName(matchingOpenData)} · {images(openDataCount)}]</span></>}
+    <span className="lineage-connector">→</span><span className="lineage-node lineage-split">[{w('Split')} · {splitName} · {images(total)}]</span>
+  </div>;
   return (
     <div className="dataset-lineage" aria-label={accessible}>
       <span className="lineage-node lineage-pseudo">[{w('Pseudo')} · {pseudoName}{pseudoRun?.labeled_count != null ? ` · ${w('{count} labeled',{count:Number(pseudoRun.labeled_count).toLocaleString()})}` : ""}]</span>
@@ -1510,20 +1555,33 @@ function defaultPromptClasses(): ClassSchema["classes"] {
   ];
 }
 
-function PseudoPage({ project, models, jobs, refreshJobs, t }: { project: Project; models: ModelLists; jobs: Job[]; refreshJobs: () => Promise<void>; t: (key: string) => string }) {
+export function PseudoPage({ project, models, jobs, refreshJobs, t }: { project: Project; models: ModelLists; jobs: Job[]; refreshJobs: () => Promise<void>; t: (key: string) => string }) {
   const ui = useUiText();
   const runtime=useWorkflow();
+  const sourceVersions=runtime?.state?.catalog.source??[];
+  const sourceId=runtime?.state?.assignments.source??'';
+  const selectedSource=sourceVersions.find(version=>version.id===sourceId);
+  const sourceReady=Boolean(selectedSource&&!selectedSource.reason&&!runtime?.busy);
   const [schemas, setSchemas] = useState<ClassSchema[]>([]);
   const [runs, setRuns] = useState<PseudoLabelRun[]>([]);
   const [schemaId, setSchemaId] = useState("");
   const [schemaName, setSchemaName] = useState("person-car-aerial-v1");
   const [pseudoRunName, setPseudoRunName] = useState(() => versionedBuildName("Pseudo"));
+  const pseudoNameEdited=useRef(false);
   const [classes, setClasses] = useState<ClassSchema["classes"]>(defaultPromptClasses());
   const [worldModel, setWorldModel] = useState("");
   const [mergeBoxes, setMergeBoxes] = useState(false);
   const [confidence, setConfidence] = useState(0.1);
   const [iou, setIou] = useState(0.7);
   const [mergeIou, setMergeIou] = useState(0.75);
+  const [filterLargeBoxes,setFilterLargeBoxes]=useState(false);
+  const [maxBoxAreaRatio,setMaxBoxAreaRatio]=useState(1/3);
+  const [minBoxAreaRatio,setMinBoxAreaRatio]=useState(0);
+  const [areaFilterMode,setAreaFilterMode]=useState<'auto'|'manual'>('auto');
+  const [areaDistribution,setAreaDistribution]=useState<BoxAreaDistribution|null>(null);
+  const [areaDistributionLoading,setAreaDistributionLoading]=useState(false);
+  const [areaDistributionError,setAreaDistributionError]=useState('');
+  const areaThresholdValid=Number.isFinite(maxBoxAreaRatio)&&maxBoxAreaRatio>0&&maxBoxAreaRatio<=1&&minBoxAreaRatio>=0&&minBoxAreaRatio<maxBoxAreaRatio;
   const [submitting, setSubmitting] = useState(false);
   const [submitMessage, setSubmitMessage] = useState<{key:string;values?:Record<string,string|number>}>({key:''});
   const submitNotice=ui(submitMessage.key,submitMessage.values);
@@ -1561,14 +1619,33 @@ function PseudoPage({ project, models, jobs, refreshJobs, t }: { project: Projec
   }
 
   useEffect(() => {
+    pseudoNameEdited.current=false;
     setPseudoRunName(versionedBuildName("Pseudo"));
     loadHistory().then((nextRuns) => {
-      setPseudoRunName(versionedBuildName("Pseudo", nextRuns.map((run) => run.run_name || "")));
+      if(!pseudoNameEdited.current)setPseudoRunName(versionedBuildName("Pseudo", nextRuns.map((run) => run.run_name || "")));
     }).catch(console.error);
   }, [project.id]);
   useEffect(() => {
     setWorldModel((current) => availableWorldModels.includes(current) ? current : availableWorldModels[0] ?? "");
   }, [models.world_models, models.world_model_details]);
+  const pseudoHistoryKey=runtime?.state?.catalog.pseudo.map(run=>run.id).join('|');
+  const latestSourceRunId=runs.find(run=>run.source_asset_id===sourceId)?.id;
+  useEffect(()=>{
+    let ignore=false;
+    setAreaDistribution(null);setAreaDistributionError('');
+    if(!sourceId){setAreaDistributionLoading(false);return;}
+    setAreaDistributionLoading(true);
+    api.pseudoAreaDistribution(project.id,sourceId).then(next=>{if(!ignore)setAreaDistribution(next);}).catch(error=>{if(!ignore)setAreaDistributionError(String(error));}).finally(()=>{if(!ignore)setAreaDistributionLoading(false);});
+    return ()=>{ignore=true;};
+  },[project.id,sourceId,latestSourceRunId]);
+  useEffect(()=>{setAreaFilterMode('auto');setMinBoxAreaRatio(0);setMaxBoxAreaRatio(1/3);},[project.id,sourceId]);
+  const displayedAreaRange:[number,number]=areaFilterMode==='auto'?[0,areaDistribution?.suggested_max??1/3]:[minBoxAreaRatio,maxBoxAreaRatio];
+  useEffect(()=>{
+    if(!runtime?.state)return;
+    let ignore=false;
+    api.pseudoLabelRuns(project.id).then(next=>{if(!ignore)setRuns(next);}).catch(console.error);
+    return ()=>{ignore=true;};
+  },[project.id,pseudoHistoryKey]);
   useEffect(() => {
     setLocalPseudoJob((current) => reconcileLocalPseudoJob(current, serverPseudoJob, project.id));
   }, [project.id, serverPseudoJob?.id, serverPseudoJob?.status]);
@@ -1616,6 +1693,8 @@ function PseudoPage({ project, models, jobs, refreshJobs, t }: { project: Projec
       setSubmitNotice("Pseudo-label generation is already running. Wait until it completes before creating another version.");
       return;
     }
+    if(!sourceReady){setSubmitNotice('Assign a Source before generating Pseudo labels');return;}
+    if(filterLargeBoxes&&!areaThresholdValid){setSubmitNotice('Maximum box area must be greater than 0% and at most 100%.');return;}
     if (!schemaId || schemaDirty) {
       setSchemaNotice("Please commit the current schema to history before Generate, then choose it from History if needed.");
       setSubmitNotice("Generate blocked: schema is not committed yet.");
@@ -1631,12 +1710,15 @@ function PseudoPage({ project, models, jobs, refreshJobs, t }: { project: Projec
       const activeSchemaId = schemaId;
       const job = await api.pseudoLabel(project.id, {
         run_name: pseudoRunName,
+        source_asset_id: sourceId,
         schema_id: activeSchemaId,
         world_model: worldModel,
         confidence,
         iou,
         merge_boxes: mergeBoxes,
-        merge_iou: mergeIou
+        merge_iou: mergeIou,
+        filter_large_boxes:filterLargeBoxes,max_box_area_ratio:areaThresholdValid?maxBoxAreaRatio:1/3,
+        min_box_area_ratio:areaThresholdValid?minBoxAreaRatio:0,area_filter_mode:areaFilterMode
       });
       setLocalPseudoJob(job);
       setSubmitNotice(mode === "restart" ? "Restart accepted. Progress will switch to the new run on the next poll." : "Request accepted. Progress and preview will update below.");
@@ -1658,7 +1740,15 @@ function PseudoPage({ project, models, jobs, refreshJobs, t }: { project: Projec
     >
       <h2 className="section-title-with-help">{t("startPseudo")} <HelpTooltip text={ui("Use this page to choose a committed person/car schema, edit prompt descriptors, then run YOLO-World. Descriptors are prompt helpers only; training labels stay canonical ids.")} /></h2>
       <p className="muted">{ui("Class schema is the training label YAML shape. Descriptors are editable YOLO-World prompts only; they collapse back to the parent class id for training.")}</p>
-      <label title={ui("Pseudo-label build name used by Augment/Split selectors.")}><span>{ui("Pseudo build name")}</span><input value={pseudoRunName} onChange={(event) => setPseudoRunName(event.target.value)} /></label>
+      <section className="schema-commit-panel" aria-label={ui('Pseudo input source')}>
+        <label><span>{ui('Source version')}</span><select value={sourceId} disabled={!runtime?.state||runtime.busy||submitting||isActiveJob(pseudoJob)} onChange={event=>{if(runtime)void runtime.change(()=>api.assignWorkflow(project.id,'source',event.target.value||null));}}>
+          <option value="">{ui('Select an assigned Source')}</option>
+          {sourceVersions.map(version=><option key={version.id} value={version.id} disabled={Boolean(version.reason)}>{version.name} · {ui('{count} images',{count:version.count.toLocaleString()})} · {version.id.slice(0,8)}</option>)}
+        </select></label>
+        {selectedSource?<><p className="muted">{ui('Only this Source will be labeled; other Sources are kept.')}</p><p className="muted">{String(selectedSource.settings.path??'')}</p></>:<p className="muted">{ui('Assign a Source in Source history or select it here before Generate.')}</p>}
+        <WorkflowError message={runtime?.error||selectedSource?.reason}/>
+      </section>
+      <label title={ui("Pseudo-label build name used by Augment/Split selectors.")}><span>{ui("Pseudo build name")}</span><input value={pseudoRunName} onChange={(event) => {pseudoNameEdited.current=true;setPseudoRunName(event.target.value);}} /></label>
       <PseudoDependencyGraph schema={graphSchema} worldModel={worldModel} mergeBoxes={mergeBoxes} hasRun={Boolean(pseudoJob || runs.length)} />
       <section className="schema-commit-panel">
         <div className="field-row">
@@ -1699,10 +1789,6 @@ function PseudoPage({ project, models, jobs, refreshJobs, t }: { project: Projec
         ))}
       </div>
       <button type="button" className="secondary add-class-action action-add" onClick={() => { markSchemaDirty(); setClasses((current) => [...current, { class_id: current.length, class_name: "new_class", descriptors: ["new object"] }]); }}>{ui("+ class")}</button>
-      <details className="history-panel" open>
-        <summary>{ui("Previous pseudo-label runs")} <HelpTooltip text={ui("These are prior Generate runs. They record which schema/settings produced labels, but selecting schemas is controlled by the History dropdown above.")} /></summary>
-        {runs.map((run) => <div className="row-card history-row" data-stage="pseudo" data-inspected={focusedRun?.id===run.id} key={run.id}><div><strong>{pseudoRunLabel(run)}</strong><span>{run.created_at} {ui("· conf=")}{String(run.confidence)} {ui("iou=")}{String(run.iou)} {ui("· images=")}{String(run.labeled_count)}/{String(run.image_count)} {ui("· merge=")}{((Number(run.merge_rate) || 0) * 100).toFixed(1)}%</span></div><HistoryDeleteButton projectId={project.id} artifactType="pseudo" artifactId={run.id} label={pseudoBuildName(run)} onDeleted={async () => { await loadHistory(); await refreshJobs(); }} /></div>)}
-      </details>
       <label>
         <span className="label-with-help">{ui("World model")} <HelpTooltip text={ui("The open-vocabulary model used for pseudo labeling. YOLOE segmentation checkpoints are converted to bounding-box annotations; masks are not stored.")} /></span>
         <select value={worldModel} disabled={!availableWorldModels.length} onChange={(event) => setWorldModel(event.target.value)}>
@@ -1718,6 +1804,8 @@ function PseudoPage({ project, models, jobs, refreshJobs, t }: { project: Projec
       </div>
       <label className="check-row" title={ui("Merge overlapping boxes that came from different prompts but map to the same training class id.")}><input type="checkbox" checked={mergeBoxes} onChange={(event) => setMergeBoxes(event.target.checked)} />{ui("Merge boxes from same class prompts")} <HelpTooltip text={ui("If multiple descriptors for the same parent class hit the same object, overlapping boxes can be merged and descriptor provenance is kept.")} /></label>
       {mergeBoxes && <label title={ui("Boxes of the same class with IoU above this value collapse into the highest-confidence box; the merged prompt names are kept as provenance.")}><span className="label-with-help">{ui("Merge IoU threshold")} <HelpTooltip text={ui("How much same-class boxes must overlap before merging. Higher means only very similar boxes merge.")} /></span><input name="merge_iou" type="number" min="0" max="1" step="0.01" value={mergeIou} onChange={(event) => setMergeIou(Number(event.target.value))} /></label>}
+      <label className="check-row"><input type="checkbox" aria-label={ui('Automatically filter large boxes')} checked={filterLargeBoxes} onChange={event=>setFilterLargeBoxes(event.target.checked)}/>{ui('Automatically filter large boxes')} <HelpTooltip text={ui('Manual range applies to the next run. Boxes on the boundaries are kept; images are never removed.')} /></label>
+      {filterLargeBoxes&&<BoxAreaRange distribution={areaDistribution} range={displayedAreaRange} automatic={areaFilterMode==='auto'} loading={areaDistributionLoading} error={areaDistributionError} onSuggest={()=>setAreaFilterMode('auto')} onChange={([lower,upper])=>{setAreaFilterMode('manual');setMinBoxAreaRatio(lower);setMaxBoxAreaRatio(upper);}}/>}
       <PseudoGenerateFeedbackPanel
         submitting={submitting}
         submitNotice={submitNotice}
@@ -1729,7 +1817,7 @@ function PseudoPage({ project, models, jobs, refreshJobs, t }: { project: Projec
         mergeIou={mergeIou}
       />
       {previewPath && <div className="pseudo-preview"><strong>{focusedRun?ui("Selected version preview"):ui("Latest processed preview")}</strong><img src={`/api/files?path=${encodeURIComponent(previewPath)}`} alt={ui("pseudo-label preview")} /></div>}
-      <ProcessingButton busy={submitting || isActiveJob(pseudoJob)} jobId={isActiveJob(pseudoJob) ? pseudoJob?.id : undefined} disabled={!schemaId || schemaDirty || !worldModel} progress={pseudoJob ? pseudoJob.progress : submitting ? 8 : undefined} statusText={pseudoJob ? pseudoJob.message || `${pseudoJob.name}: ${pseudoJob.status}` : submitNotice || ui("Submitting pseudo-label run…")} taskName={ui("Pseudo Label Generate")} className="primary action-process"><Play size={17} />{ui("Generate Pseudo Labels")}</ProcessingButton>
+      <ProcessingButton busy={submitting || isActiveJob(pseudoJob)} jobId={isActiveJob(pseudoJob) ? pseudoJob?.id : undefined} disabled={!sourceReady || !schemaId || schemaDirty || !worldModel || (filterLargeBoxes&&!areaThresholdValid)} progress={pseudoJob ? pseudoJob.progress : submitting ? 8 : undefined} statusText={pseudoJob ? pseudoJob.message || `${pseudoJob.name}: ${pseudoJob.status}` : submitNotice || ui("Submitting pseudo-label run…")} taskName={ui("Pseudo Label Generate")} className="primary action-process"><Play size={17} />{ui("Generate Pseudo Labels")}</ProcessingButton>
     </form>
   );
 }

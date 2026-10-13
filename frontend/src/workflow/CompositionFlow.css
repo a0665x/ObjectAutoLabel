@@ -1,9 +1,14 @@
 /* A source is a deck of versions; only deliberate clicks change the recipe. */
 .composition-flow-workspace { container-type: inline-size; min-width: 0; }
 .composition-flow {
-  display: grid; grid-template-columns: minmax(0, 1fr) 28px minmax(0, 1fr) 28px minmax(0, 1fr) 28px minmax(0, 1fr);
+  display: grid; grid-template-columns: minmax(0,1fr) 28px minmax(0,1fr) 28px minmax(0,1fr) 28px minmax(0,1fr);
   gap: 8px; align-items: stretch; padding: 40px 10px 10px;
 }
+.composition-source-groups { grid-column: span 3; display: flex; flex-direction: column; gap: 36px; min-width: 0; }
+.composition-source-group { display: grid; grid-template-columns: minmax(0,1fr) 28px minmax(0,1fr); gap: 8px; min-width: 0; }
+.composition-group-heading { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.composition-board .composition-add-group { align-self: flex-start; min-height: 44px; white-space: normal; }
+.composition-flow > .composition-flow-node { align-self: center; width: 100%; }
 .composition-board .composition-flow-node {
   position: relative; isolation: isolate; min-width: 0; padding: 0; border: 0;
   border-radius: 14px; background: transparent; color: var(--ink); text-align: left;
@@ -64,6 +69,8 @@
 @keyframes composition-flow-reveal { from { opacity: .6; transform: translateY(5px); } to { opacity: 1; transform: none; } }
 @container (max-width: 680px) {
   .composition-flow { grid-template-columns: minmax(0,1fr); padding: 26px 10px 10px; gap: 16px; }
+  .composition-source-group { grid-template-columns: minmax(0,1fr); gap: 16px; }
+  .composition-source-groups { grid-column: auto; }
   .composition-flow-face { min-height: 110px; gap: 6px; }
   .composition-flow-footer { margin-top: 2px; }
   .composition-connector { min-height: 24px; }

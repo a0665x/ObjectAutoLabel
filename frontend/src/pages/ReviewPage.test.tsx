@@ -6,6 +6,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { api, type ImageFilters } from "../api/client";
 import type { Annotation, Project, ProjectImage, ReviewImagePosition } from "../types";
 import { ReviewPage } from "./ReviewPage";
+import {WorkflowProvider, AssignmentFooter, type WorkflowState} from '../workflow/WorkflowState';
 
 const project: Project = {
   id: "project-1",
@@ -111,6 +112,30 @@ function mockReviewApi() {
   }));
 }
 
+it('uses Assign versions for map, positions, histogram and snapshot saves, and guards dirty assignment changes',async()=>{
+  mockReviewApi();
+  const version=(id:string,name:string,parent_id?:string)=>({id,name,parent_id,count:1,settings:{schema_id:'schema-1'},reason:'',created_at:''});
+  const state:WorkflowState={project_id:project.id,assignments:{pseudo:'old',augmentation:'aug'},composition_id:null,compositions:[],catalog:{pseudo:[version('old','Old pseudo'),version('new','New pseudo')],augmentation:[version('aug','Linked augment','old')],open_data:[],split:[],training:[],conversion:[]}};
+  vi.spyOn(api,'workflowState').mockResolvedValue(state);
+  const assign=vi.spyOn(api,'assignWorkflow').mockResolvedValue({...state,assignments:{pseudo:'new'}});
+  const confirm=vi.spyOn(window,'confirm').mockReturnValue(false);
+  const {container}=render(<WorkflowProvider projectId={project.id} revision="1"><ReviewPage project={project} t={key=>key}/><AssignmentFooter page="review" onDeleted={async()=>{}}/></WorkflowProvider>);
+  await waitFor(()=>expect(api.images).toHaveBeenCalledWith(project.id,expect.objectContaining({pseudo_label_run_id:'old',augmentation_run_id:'aug'})));
+  await waitFor(()=>expect(api.annotations).toHaveBeenCalledWith(image.id,'old'));
+  expect(within(screen.getByRole('group',{name:'Dataset composition'})).getByText('Old pseudo')).toBeTruthy();
+  expect(within(screen.getByRole('group',{name:'Dataset composition'})).getByText('Linked augment')).toBeTruthy();
+  await waitFor(()=>expect(api.imagePosition).toHaveBeenCalledWith(project.id,image.id,expect.objectContaining({pseudo_label_run_id:'old',augmentation_run_id:'aug'})));
+  expect(api.bboxHistogram).toHaveBeenCalledWith(project.id,expect.objectContaining({pseudo_label_run_id:'old',augmentation_run_id:'aug'}));
+  // A duplicate command edits the saved version and must prevent unconfirmed replacement.
+  await openBoxMenu(container);
+  fireEvent.click(screen.getByRole('menuitem',{name:'Duplicate selected'}));
+  await screen.findByText('3 annotations');
+  fireEvent.click(screen.getAllByRole('button',{name:'Assign Pseudo'})[1]);
+  expect(confirm).toHaveBeenCalled();expect(assign).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button',{name:/^Save$/}));
+  await waitFor(()=>expect(api.saveAnnotations).toHaveBeenCalledWith(image.id,expect.anything(),'old'));
+});
+
 function deferImagePosition() {
   let resolvePosition: ((position: ReviewImagePosition) => void) | undefined;
   let rejectPosition: ((reason?: unknown) => void) | undefined;
@@ -128,6 +153,120 @@ function deferImagePosition() {
     }
   };
 }
+
+it('reuses previous labels on an empty next frame with fresh identities, Undo and explicit save',async()=>{
+  mockReviewApi();
+  const nextImage={...image,id:'image-2',path:'/tmp/project/next.jpg',width:500,height:1000};
+  vi.mocked(api.images).mockResolvedValue([image,nextImage]);
+  vi.mocked(api.annotations).mockImplementation(async id=>({image:id===image.id?image:nextImage,annotations:id===image.id?annotations:[]}));
+  render(<ReviewPage project={project} t={key=>key}/>);
+  await screen.findByText('2 annotations');
+  expect((screen.getByRole('button',{name:'Reuse'}) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByTitle('Next image (ArrowRight)'));
+  await waitFor(()=>expect((screen.getByRole('button',{name:'Reuse'}) as HTMLButtonElement).disabled).toBe(false));
+  await screen.findByText('0 annotations');
+  fireEvent.click(screen.getByRole('button',{name:'Reuse'}));
+  await screen.findByText('2 annotations');expect(screen.getByText('Unsaved')).toBeTruthy();
+  expect(api.saveAnnotations).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button',{name:'Reuse'}));await screen.findByText('2 annotations');
+  fireEvent.keyDown(window,{key:'z',ctrlKey:true});await screen.findByText('0 annotations');
+  fireEvent.click(screen.getByRole('button',{name:'Reuse'}));await screen.findByText('2 annotations');
+  fireEvent.click(screen.getByRole('button',{name:/^Save$/}));
+  await waitFor(()=>expect(api.saveAnnotations).toHaveBeenCalled());
+  const [id,payload]=vi.mocked(api.saveAnnotations).mock.calls[0];
+  expect(id).toBe(nextImage.id);
+  expect(payload.annotations[0]).toMatchObject({class_id:0,x_center:.3,y_center:.5,width:.1,height:.2,confidence:null,source_type:'manual',edited:true});
+  expect(payload.annotations[0].id).not.toBe(annotations[0].id);
+});
+
+it.each([false,true])('keeps final edited labels reusable after N when the saved frame leaves the queue (%s)',async(leavesQueue)=>{
+  mockReviewApi();
+  const first={...image,source_asset_id:'s',pseudo_label_run_id:'pseudo'};
+  const next={...first,id:'image-2',path:'/tmp/project/next.jpg'};
+  const state:WorkflowState={project_id:project.id,assignments:{pseudo:'pseudo'},composition_id:null,compositions:[],catalog:{pseudo:[{id:'pseudo',name:'Pseudo',count:2,settings:{schema_id:'schema-1'},reason:'',created_at:''}],augmentation:[],open_data:[],split:[],training:[],conversion:[]}};
+  vi.spyOn(api,'workflowState').mockResolvedValue(state);
+  let finishQueue!:(images:ProjectImage[])=>void;
+  const queue=new Promise<ProjectImage[]>(resolve=>{finishQueue=resolve;});
+  let saved:Annotation[]|null=null,refreshRequested=false;
+  vi.mocked(api.images).mockImplementation(async()=>{if(saved){refreshRequested=true;return queue;}return [first,next];});
+  vi.mocked(api.annotations).mockImplementation(async id=>({image:id===first.id?first:next,annotations:id===first.id?annotations:[]}));
+  vi.mocked(api.saveAnnotations).mockImplementation(async(_id,payload)=>{saved=payload.annotations;return {annotations:payload.annotations,label_path:'/tmp/mock.txt'};});
+  vi.mocked(api.imagePosition).mockImplementation(async(_project,id)=>({filtered_index:id===first.id?1:2,filtered_total:2,project_index:id===first.id?1:2,project_total:2}));
+  const {container}=render(<WorkflowProvider projectId={project.id} revision="1"><ReviewPage project={project} t={key=>key}/></WorkflowProvider>);
+  await screen.findByText('2 annotations');
+  await openBoxMenu(container);fireEvent.click(screen.getByRole('menuitem',{name:'Duplicate selected'}));
+  await screen.findByText('3 annotations');
+  fireEvent.keyDown(window,{key:'n'});
+  await waitFor(()=>expect(refreshRequested).toBe(true));
+  await act(async()=>finishQueue(leavesQueue?[next]:[first,next]));
+  expect((screen.getByRole('button',{name:'Reuse'}) as HTMLButtonElement).disabled).toBe(false);
+  await screen.findByText('0 annotations');
+  fireEvent.click(screen.getByRole('button',{name:'Reuse'}));await screen.findByText('3 annotations');
+  fireEvent.click(screen.getByRole('button',{name:/^Save$/}));
+  await waitFor(()=>expect(api.saveAnnotations).toHaveBeenLastCalledWith(next.id,expect.objectContaining({annotations:expect.arrayContaining([expect.objectContaining({x_center:.3}),expect.objectContaining({x_center:.6})])}),'pseudo'));
+});
+
+it('keeps Reuse disabled at a Source boundary even when the preceding image has labels',async()=>{
+  mockReviewApi();
+  const first={...image,source_asset_id:'first'};
+  const next={...image,id:'image-2',path:'/tmp/second.jpg',source_asset_id:'second'};
+  vi.mocked(api.images).mockResolvedValue([first,next]);
+  vi.mocked(api.annotations).mockImplementation(async id=>({image:id===first.id?first:next,annotations:id===first.id?annotations:[]}));
+  render(<ReviewPage project={project} t={key=>key}/>);
+  await screen.findByText('2 annotations');fireEvent.click(screen.getByTitle('Next image (ArrowRight)'));
+  await screen.findByText('0 annotations');
+  expect((screen.getByRole('button',{name:'Reuse'}) as HTMLButtonElement).disabled).toBe(true);
+});
+
+it('finds the nearest labeled predecessor when intervening frames are empty',async()=>{
+  mockReviewApi();
+  const blank={...image,id:'image-2',path:'/tmp/blank.jpg'};
+  const target={...image,id:'image-3',path:'/tmp/target.jpg'};
+  vi.mocked(api.images).mockResolvedValue([image,blank,target]);
+  vi.mocked(api.annotations).mockImplementation(async id=>({image:id===image.id?image:id===blank.id?blank:target,annotations:id===image.id?annotations:[]}));
+  render(<ReviewPage project={project} t={key=>key}/>);
+  await screen.findByText('2 annotations');
+  fireEvent.click(screen.getByTitle('Next image (ArrowRight)'));await screen.findByText('0 annotations');
+  fireEvent.click(screen.getByTitle('Next image (ArrowRight)'));
+  await waitFor(()=>expect(api.imagePosition).toHaveBeenCalledWith(project.id,target.id,expect.anything()));
+  expect((screen.getByRole('button',{name:'Reuse'}) as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(screen.getByRole('button',{name:'Reuse'}));await screen.findByText('2 annotations');
+});
+
+it.each([[.09,0,2],[.08,0,3],[.07,0,3],[.09,1,3]])('keeps current-frame boxes and respects strict 0.8 IoU/class boundaries (width=%s class=%s count=%s)',async(width,classId,count)=>{
+  mockReviewApi();
+  const target={...image,id:'image-2',path:'/tmp/target.jpg'};
+  const incoming=[{...annotations[0],width,class_id:classId,class_name:classId===1?'person':'car',confidence:.99},annotations[1]];
+  const existing={...annotations[0],id:'current-box',confidence:.1};
+  vi.mocked(api.images).mockResolvedValue([image,target]);
+  vi.mocked(api.annotations).mockImplementation(async id=>({image:id===image.id?image:target,annotations:id===image.id?incoming:[existing]}));
+  render(<ReviewPage project={project} t={key=>key}/>);
+  await screen.findByText('2 annotations');fireEvent.click(screen.getByTitle('Next image (ArrowRight)'));
+  await screen.findByText('1 annotations');
+  await waitFor(()=>expect((screen.getByRole('button',{name:'Reuse'}) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button',{name:'Reuse'}));
+  expect(screen.getByText(`${count} annotations`)).toBeTruthy();
+  fireEvent.keyDown(window,{key:'z',ctrlKey:true});await screen.findByText('1 annotations');
+  fireEvent.keyDown(window,{key:'z',ctrlKey:true,shiftKey:true});await screen.findByText(`${count} annotations`);
+  fireEvent.click(screen.getByRole('button',{name:'Reuse'}));expect(screen.getByText(`${count} annotations`)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:/^Save$/}));
+  const copiedFirst=expect.objectContaining({class_id:classId,width,x_center:.3,confidence:null,source_type:'manual',edited:true});
+  const copiedSecond=expect.objectContaining({class_id:0,x_center:.6,confidence:null,source_type:'manual',edited:true});
+  await waitFor(()=>expect(api.saveAnnotations).toHaveBeenCalledWith(target.id,expect.objectContaining({annotations:count===2?[existing,copiedSecond]:[existing,copiedFirst,copiedSecond]})));
+});
+
+it('uses the most recently chosen Review merge threshold for Reuse',async()=>{
+  mockReviewApi();vi.spyOn(window,'prompt').mockReturnValue('0.7');
+  const target={...image,id:'image-2',path:'/tmp/target.jpg'};
+  const previous=[{...annotations[0],width:.08},annotations[1]];
+  vi.mocked(api.images).mockResolvedValue([image,target]);
+  vi.mocked(api.annotations).mockImplementation(async id=>({image:id===image.id?image:target,annotations:id===image.id?previous:[annotations[0]]}));
+  render(<ReviewPage project={project} t={key=>key}/>);
+  await screen.findByText('2 annotations');fireEvent.click(screen.getByTitle('Next image (ArrowRight)'));await screen.findByText('1 annotations');
+  fireEvent.click(screen.getByRole('button',{name:'Merge boxes'}));
+  await waitFor(()=>expect(screen.getByRole('button',{name:'Reuse'}).getAttribute('title')).toContain('0.70'));
+  fireEvent.click(screen.getByRole('button',{name:'Reuse'}));await screen.findByText('2 annotations');
+});
 
 function deferImageQueue() {
   let resolveQueue: ((images: ProjectImage[]) => void) | undefined;

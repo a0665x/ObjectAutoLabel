@@ -61,4 +61,4 @@ Detailed checks: [Review](references/review-editing-and-image-removal.md#verific
 - Inspect current addresses with `./run.sh --status` and
   `./run.sh --tailscale-status`; historical LAN addresses are not configuration.
 
-For setup, use [繁體中文](../README.md) or [English](../README.en.md).
+For setup, use [English](../README.md) or [繁體中文](../README.zh.md).

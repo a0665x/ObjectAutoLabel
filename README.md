@@ -1,115 +1,124 @@
 # ObjectAutoLabel
 
-繁體中文 · [English](README.en.md)
+English · [繁體中文](README.zh.md)
 
-本機優先的物件偵測資料與模型工作台：從圖片／影片、偽標註、人工校正到資料增強、切分、YOLO 訓練及模型匯出，在同一個 WebUI 完成。
+A local-first workspace for object-detection datasets and models. Prepare images or video, generate pseudo labels, review boxes, augment and split data, train YOLO models, and export results in one WebUI.
 
-![操作介面預覽](demo_imgs/interface_preview.gif)
+## Purpose
 
-## 快速開始
+- **Fast pseudo labeling and YOLO training.** Use prompt-driven vision models (YOLO-World / YOLOE) to generate bounding-box labels, then train compatible YOLO architectures such as YOLO11 and YOLO26.
+- **Local-first, API-driven iteration.** Keep labeling and training on your own machine. Local AI agents can call the REST API to generate labels, build splits, submit training jobs, and inspect results. A built-in MCP server is not currently included.
+- **Generated data to task-specific detectors.** Import images from ComfyUI or frames from [MiniMax H3 videos](https://comfy.org/minimax-h3/) into the same labeling and training pipeline. This workflow requires no simulator or separate sim2real conversion step; real-world performance still needs validation.
 
-需要 Linux、Docker Compose 與 NVIDIA GPU 執行環境（驅動及 NVIDIA Container Toolkit）。支援 x86_64 桌機與 Jetson ARM64；Jetson 映像須符合主機的 JetPack／L4T 版本。
+![Interface preview](demo_imgs/interface_preview.gif)
+
+## Quick start
+
+Requires Linux, Docker Compose, and an NVIDIA GPU runtime (driver and NVIDIA Container Toolkit). Supports x86_64 desktops and Jetson ARM64; the Jetson image must match the host's JetPack/L4T version.
 
 ```bash
 git clone https://github.com/a0665x/ObjectAutoLabel.git
 cd ObjectAutoLabel
 
-# 安裝偽標註模型與提示詞編碼器；首次下載需要網路
+# Install the pseudo-label model and prompt encoders; first download needs internet
 scripts/install-world-model.sh
 
-# 安裝 YOLO11n 訓練起始權重
+# Install YOLO11n starting weights
 scripts/install-input-model.sh
 
-# 首次安裝：選擇平台、建立映像並啟動
+# First installation: select the platform, build the image, and start
 ./run.sh
 ```
 
-開啟 [http://127.0.0.1:8501/](http://127.0.0.1:8501/)。Jetson 的區網位址以啟動輸出為準。
+Open [http://127.0.0.1:8501/](http://127.0.0.1:8501/). On Jetson, use the LAN address printed by the launcher.
 
-`./run.sh` 只在映像不存在時建立並啟動；已有映像時，使用下列指令：
+Bare `./run.sh` builds and starts only when the image is missing. With an existing image:
 
-| 操作 | 指令 |
+| Action | Command |
 | --- | --- |
-| 啟動／重開機後啟動，不重建 | `./run.sh --up` |
-| 更新程式後重建並啟動 | `./run.sh --rebuild` |
-| 查看狀態／日誌 | `./run.sh --status` ／ `./run.sh --logs` |
-| 停止服務 | `./run.sh --down` |
-| 指定平台 | `./run.sh --mode desktop` ／ `./run.sh --mode jetson` |
+| Start, including after reboot; no rebuild | `./run.sh --up` |
+| Rebuild and start after code updates | `./run.sh --rebuild` |
+| Status / logs | `./run.sh --status` / `./run.sh --logs` |
+| Stop | `./run.sh --down` |
+| Select platform | `./run.sh --mode desktop` / `./run.sh --mode jetson` |
 
-重建會中斷執行中的工作；請先確認訓練等任務已結束。重建不會清除資料與模型。
+Rebuilding interrupts running jobs; wait for training and other tasks to finish. It does not clear datasets or models.
 
-## 準備資料與模型
+## Data and models
 
-將圖片資料夾或影片放入 `data/input/`，再到 Sources 選擇。容器內對應路徑為 `/app/data/input/`。
+Place image folders or videos in `data/input/`, then select them in Sources. The corresponding container path is `/app/data/input/`.
 
 ```text
-data/input/        原始圖片與影片
-data/projects/     各專案的圖片、標註、切分與模型成果
-data/opendata/     共用的公開資料快取
-world_model/       偽標註模型及提示詞編碼器
-input_model/       訓練起始權重
-output_model/      專案模型索引
+data/input/        Original images and videos
+data/projects/     Project images, labels, splits, and model outputs
+data/opendata/     Shared public-dataset cache
+world_model/       Pseudo-label models and prompt encoders
+input_model/       Training starting weights
+output_model/      Project model index
 ```
 
-可選模型：
+Optional models:
 
 ```bash
-# 改用 YOLO-World v2 Small 偽標註
+# Use YOLO-World v2 Small for pseudo labeling
 scripts/install-world-model.sh yolov8s-worldv2.pt
 
-# 加入 YOLO26n 訓練權重
+# Add YOLO26n training weights
 scripts/install-input-model.sh yolo26n.pt
 ```
 
-安裝腳本會驗證下載檔案的 SHA-256。模型目錄已掛載到容器，新增模型後重新整理頁面即可，不必重建。資料、權重、密鑰與執行日誌不會提交到 Git。
+Installers verify SHA-256 checksums. Model folders are bind-mounted: refresh the browser after adding weights; no rebuild is needed. Datasets, weights, secrets, and runtime logs are excluded from Git.
 
-## 操作流程
+## Workflow
 
-1. **Projects**：建立或選擇專案。
-2. **Sources**：選擇圖片資料夾或影片，執行 Process & analysis，再於 Source history 指定要使用的版本。影片可設定抽幀；重複處理同一路徑會先要求確認。
-3. **Pseudo Label**：提交類別與提示詞設定，確認已指定的 Source，選擇模型並產生偽標註。可合併同類提示詞的框，並用面積分佈直方圖的可拖曳區間排除過大的框；Auto 會依新一輪偵測結果計算範圍。
-4. **Review**：依指定的 Pseudo／Augment 版本檢查與修改框。沿用（Reuse）會複製同來源／版本最近保存的整組標註，空白或已有框的圖片都能使用。同類別框 IoU > 0.8 時保留當前圖片原有框；門檻跟隨最近設定的 Review Merge 值。檢查後仍需保存。
-5. **Augment**：選擇對應的 Pseudo 版本，設定增強效果及倍率；不需要增強時使用 Skip augment。
-6. **Open Data（選用）**：匯入 VisDrone 或 Ultralytics Platform 的 Detect 資料集，完成類別映射與取樣。Platform 需 API key；Open Data 不經 Pseudo／Augment。
-7. **Split**：在 Dataset sources 加入一組或多組平行的 Pseudo → Augment，另可加入一個 Open Data 版本。確認數量與比例，保存並指定組合，再建立 Split 版本。Open Data 的既有訓練／驗證分組會保留。
-8. **Train**：選擇有效的 Split、起始模型與訓練參數；在 Task Center 查看進度或取消。
-9. **Validate → Convert / Export**：抽樣驗證模型，轉換及下載模型包。x86_64 支援 ONNX／LiteRT FP32；Jetson 請將 PT 權重移到 x86_64 主機轉換。
-10. **Stream Demo**：以 PT、ONNX 或 LiteRT 模型對攝影機／上傳影片推論。
+![ObjectAutoLabel workflow: local or generated media becomes parallel Pseudo, Review and Augment branches; optional Open Data joins Split, Train, Validate, Export and Stream Demo. Validation feeds the next iteration.](docs/diagrams/workflow.en.svg)
 
-各頁的 **Assign & history** 保留版本選擇；Review 的 Pseudo 與 Augment 各自使用其指定版本。修改上游標註後，受影響的 Split 可能過期，需要重建才能用於新訓練。
+[Edit the flowchart in draw.io](docs/diagrams/workflow.drawio) · English / 繁體中文 pages
 
-## Review 快捷鍵
+- **Sources → Pseudo**: process images or extract video frames, assign the Source version, and commit classes and prompts. Reprocessing the same path requires confirmation.
+- **Pseudo → Review**: merge same-class prompt boxes and optionally filter oversized boxes with the histogram range. Reuse copies the most recently saved compatible label group, including onto blank images. Same-class IoU above the threshold keeps current boxes (default 0.8); check and save.
+- **Parallel groups → Split**: select one or more Pseudo → Augment groups; Skip augment creates a pass-through build. Optional Open Data bypasses Pseudo/Augment, with class mapping and sampling; Platform requires an API key.
+- **Split → Train**: save and assign the composition, then build a Split. Assign & history persists versions; upstream edits may invalidate downstream Splits. Monitor training or cancel jobs in Task Center.
+- **Validate → Export / Stream Demo**: check samples, download a model package, or run camera/video inference. Conversion is x86_64 ONNX/LiteRT FP32; move Jetson PT weights to x86_64 for conversion.
 
-| 操作 | 快捷鍵 |
+## API and local AI agents
+
+[Interactive API docs](http://127.0.0.1:8501/docs) · [OpenAPI schema](http://127.0.0.1:8501/openapi.json) · [Endpoint reference](spec/API.md)
+
+Long-running requests return a job ID; poll `GET /api/jobs/{job_id}` for status and results. Agents can use these endpoints for a generate → train → evaluate loop. MCP access requires a separately implemented adapter around this REST API; ComfyUI integration currently means importing generated files, not an embedded generation node.
+
+## Review shortcuts
+
+| Action | Shortcut |
 | --- | --- |
-| 選取／畫框／平移 | `D` ／ `B` ／ `H` |
-| 保存並下一張 | `N` 或 `Shift+S` |
-| 保存 | `Ctrl/Cmd+S` |
-| 復原／重做 | `Ctrl/Cmd+Z` ／ `Ctrl/Cmd+Shift+Z` |
-| 複製／貼上／複製所選框 | `Ctrl/Cmd+C` ／ `Ctrl/Cmd+V` ／ `Ctrl/Cmd+D` |
-| 刪除所選框 | `Delete` ／ `Backspace` |
-| 多選／縮放 | `Shift+拖曳` ／ `Ctrl+滾輪` |
-| 移除專案內圖片（需確認） | `Shift+X` |
+| Select / Draw / Pan | `D` / `B` / `H` |
+| Save and next | `N` or `Shift+S` |
+| Save | `Ctrl/Cmd+S` |
+| Undo / Redo | `Ctrl/Cmd+Z` / `Ctrl/Cmd+Shift+Z` |
+| Copy / Paste / Duplicate selected boxes | `Ctrl/Cmd+C` / `Ctrl/Cmd+V` / `Ctrl/Cmd+D` |
+| Delete selected boxes | `Delete` / `Backspace` |
+| Multi-select / Zoom | `Shift+drag` / `Ctrl+wheel` |
+| Remove a project image (confirmation required) | `Shift+X` |
 
-沿用後可復原；重複按沿用不會再加入相同框。右鍵可開啟框的編輯選單。
+Reuse supports Undo, and repeated clicks do not add identical boxes. Right-click a box for editing actions.
 
-## 使用注意
+## Important notes
 
-- 刪除專案或 Source history 不會刪除 `data/input/` 原始檔案；刪除上游歷史會連帶刪除依賴它的下游成果，請確認提示內容。
-- 服務以可信任的本機／私人網路操作為主。CLI 是具掛載資料存取權的真實 shell，需保護其 token；不要直接對公開網路開放。
-- 私人遠端存取可使用 `./run.sh --tailscale-up`。選用登入設定見 [.env.example](.env.example)；登入目前不提供使用者間的專案隔離。
+- Deleting a project or Source history preserves originals in `data/input/`. Deleting upstream history also deletes dependent downstream outputs; read the confirmation carefully.
+- Intended for trusted local/private-network use. The CLI is a real shell with mounted-data access: protect its token and do not expose the service directly to the public internet.
+- For private remote access, use `./run.sh --tailscale-up`. Optional sign-in settings are in [.env.example](.env.example); sign-in does not currently isolate projects between users.
 
-## 開發與文件
+## Development and documentation
 
-FastAPI + SQLite + React／TypeScript + Vite。開發細節見 [專案結構](spec/PROJECT_MAP.md)、[部署與排錯](spec/OPERATIONS.md)及 [CLI 操作](cli_workspace/README.md)。
+FastAPI + SQLite + React/TypeScript + Vite. See [project structure](spec/PROJECT_MAP.md), [deployment and troubleshooting](spec/OPERATIONS.md), and [CLI usage](cli_workspace/README.md).
 
 ```bash
-# 需先安裝相應測試依賴；後端建議使用專案的 Docker 環境
+# Install the appropriate test dependencies first; use the project Docker environment for backend tests
 pytest -q
 npm --prefix frontend test -- --run --maxWorkers=1
 npm --prefix frontend run build
 ```
 
-## 授權
+## License
 
-[AGPL-3.0](LICENSE)。透過網路提供修改版服務時，須依授權提供相應原始碼。第三方授權見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+[AGPL-3.0](LICENSE). Network-hosted modified versions must provide corresponding source as required by the license. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party notices.

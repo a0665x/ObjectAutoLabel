@@ -5,6 +5,14 @@ Stream Demo endpoints and its WebSocket message protocol are documented in
 
 Most long-running endpoints return a job record. Poll `GET /api/jobs` for recent status or `GET /api/jobs/{job_id}` for one job.
 
+## Automation interface
+
+The built-in integration is HTTP REST, with interactive documentation at `/docs`
+and a machine-readable schema at `/openapi.json`. Local automation can submit
+Pseudo, Split and Train jobs and inspect their status and results. No MCP server
+or ComfyUI generation node is bundled; an external adapter may wrap the API,
+and generated images or videos enter through the normal Sources workflow.
+
 ## Job Shape
 
 ```json

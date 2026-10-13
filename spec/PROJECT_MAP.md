@@ -6,7 +6,12 @@ ObjectAutoLabel
 
 ## Description
 
-ObjectAutoLabel is a Dockerized WebUI for object-detection dataset preparation and YOLO model operations. It migrates useful behavior from the original `yoloworld/streamlit` project while removing Streamlit, Tkinter file dialogs, and page-local state. The runtime is `FastAPI + SQLite + React/Vite frontend + Docker Compose`, with long-running YOLO operations tracked as backend jobs.
+ObjectAutoLabel is a local-first platform for prompt-driven pseudo labeling and
+training compatible YOLO object detectors. Original or generated images/videos
+enter the same Source, Review, Augment, Split and Train workflow. A REST API with
+OpenAPI documentation supports local automation; an MCP server is not bundled.
+The runtime is `FastAPI + SQLite + React/Vite + Docker Compose`, with long-running
+operations tracked as backend jobs.
 
 ## Read First
 

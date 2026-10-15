@@ -288,6 +288,7 @@ class StreamSession:
     def __init__(self, config: StreamConfig, model_path: str, source: Path, camera_mode: dict[str, Any] | None = None):
         self.config = config
         self.model_path = model_path
+        self.model_identity = {"model_id": config.model_id, "path": str(model_path), "format": Path(model_path).suffix.lstrip('.')}
         self.external_coordinates = None
         self.label_names = None
         self.source = source
@@ -329,20 +330,20 @@ class StreamSession:
             while self.selection_requests:
                 identity, media_time = self.selection_requests.pop(0)
                 self.identity.select(identity, media_time)
-            self.objects = self.tracker.update(result, self.config.conf)
-            self.stats["detections"] = len(self.objects)
-            self.objects = self.identity.update(self.objects, self.stats['frames'] / self.config.fps)
+            tracks = self.tracker.update(result, self.config.conf)
+            self.stats["detections"] = len(self.tracker.detections)
+            self.stats["tracks"] = len(tracks)
+            observed = self.identity.update(tracks, self.stats['frames'] / self.config.fps)
+            matched = {item['detection_index'] for item in observed if not item.get('predicted')}
+            untracked = [item for item in self.tracker.detections if item['detection_index'] not in matched]
+            self.stats["untracked"] = len(untracked)
+            self.objects = [*observed, *untracked]
             # Interactive boxes are drawn at the matching playback timestamp in
             # the browser, so a paused or delayed frame cannot select a future ID.
             return frame
-        boxes = result.boxes
-        self.stats["detections"] = len(boxes) if boxes is not None else 0
-        if boxes is not None:
-            for box, score, class_id in zip(boxes.xyxy.cpu().numpy(), boxes.conf.cpu().numpy(), boxes.cls.cpu().numpy()):
-                x1, y1, x2, y2 = map(int, box)
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (80, 220, 80), 2)
-                label = f"{result.names[int(class_id)]} {score:.2f}"
-                cv2.putText(frame, label, (max(0, x1), max(16, y1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (80, 220, 80), 1, cv2.LINE_AA)
+        from .stream_tracking import display_detections
+        self.objects = display_detections(result, self.config.conf)
+        self.stats.update(detections=len(self.objects), tracks=0, untracked=len(self.objects))
         return frame
 
     async def run(self, websocket: Any) -> None:
@@ -355,7 +356,8 @@ class StreamSession:
             model = await asyncio.to_thread(YOLO, self.model_path, task="detect")
         decoder = await self.spawn(decode_command(self.config, self.source, self.camera_mode))
         encoder = await self.spawn(encode_command(self.config))
-        await websocket.send_json({"type": "started", "mime": MIME, "start_seconds": self.config.start_seconds})
+        await websocket.send_json({"type": "started", "mime": MIME, "start_seconds": self.config.start_seconds,
+                                   "model": self.model_identity})
 
         async def infer():
             began = time.monotonic()

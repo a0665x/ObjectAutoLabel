@@ -5,6 +5,15 @@ export type InputStage = typeof inputStages[number];
 export const recipeFields = {pseudo:'pseudo_label_run_id',augmentation:'augmentation_run_id',open_data:'open_data_import_id'} as const;
 export const sourcePages: Record<Stage,string> = {source:'sources',pseudo:'pseudo',augmentation:'augment',open_data:'open-data',split:'split',training:'train',conversion:'convert'};
 export const emptyRecipe: Recipe = {pseudo_label_run_id:null,augmentation_run_id:null,open_data_import_id:null};
+export function splitRecipe(split:Record<string,unknown>):Recipe {
+  let saved=split.composition;
+  if(!saved&&typeof split.composition_json==='string')try{saved=JSON.parse(split.composition_json);}catch{/* Older builds use their explicit ids. */}
+  const record=saved&&typeof saved==='object'?saved as Record<string,unknown>:split;
+  const id=(key:string)=>typeof record[key]==='string'?record[key] as string:null;
+  const recipe:Recipe={pseudo_label_run_id:id('pseudo_label_run_id'),augmentation_run_id:id('augmentation_run_id'),open_data_import_id:id('open_data_import_id')};
+  if(Array.isArray(record.branches))recipe.branches=record.branches.map(branch=>({pseudo_label_run_id:branch.pseudo_label_run_id??null,augmentation_run_id:branch.augmentation_run_id??null}));
+  return withBranches(recipe,sourceBranches(recipe));
+}
 export function assignedRecipe(state:WorkflowState|null):Recipe {
   const composition=state?.compositions.find(item=>item.id===state.composition_id&&!item.reason);
   if(composition?.branches)return withBranches(composition,sourceBranches(composition));

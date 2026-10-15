@@ -233,6 +233,7 @@ def create_stream_router(get_repo: Callable[[], Repository], auth_enabled: Calla
                     raise ValueError("Output FPS exceeds the camera capture mode")
                 source = Path("/dev") / camera["id"]
             session = stream.StreamSession(config, selected["path"], source, mode)
+            session.model_identity = {"model_id": config.model_id, "path": str(selected["path"]), "format": selected["format"]}
             session.external_coordinates = selected.get('external_coordinates')
             from .stream_labels import resolve_stream_labels
             session.label_names = resolve_stream_labels(get_repo(), project_id, selected, config.schema_id)

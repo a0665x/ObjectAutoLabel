@@ -38,8 +38,9 @@ Failed conversions and missing model files are not selectable.
 `stream_demo.py` owns a bounded session: FFmpeg seeks/decodes uploaded files,
 GStreamer captures cameras, and both produce aspect-preserving padded BGR frames.
 Ultralytics infers with the selected engine and GStreamer encodes H.264 into
-fragmented MP4. ByteTrack mode draws timestamp-synchronized interactive boxes in
-the browser; detection-only mode keeps encoded OpenCV boxes. The browser uses MediaSource via a same-origin
+fragmented MP4. Tracking mode draws timestamp-synchronized detections in the
+browser: confirmed IDs are interactive, while unconfirmed detections remain
+visible without a selectable ID. Detection-only mode keeps encoded OpenCV boxes. The browser uses MediaSource via a same-origin
 WebSocket. The output is video-only; audio is not forwarded. X264 bitrate is a
 target in kbps, not a guaranteed exact network rate. See
 [x264enc](https://gstreamer.freedesktop.org/documentation/x264/index.html) and
@@ -59,7 +60,7 @@ browser buffers are bounded. A file ends at EOF and may be started again.
 Uploaded files have a full-duration timeline, Pause/Resume, Replay, and a seconds
 field with Go. Pointer release or keyboard adjustment waits for the previous
 socket to release its slot, then re-decodes from the requested time. Seeking,
-source/model changes, and replay reset tracking and selection. Pause freezes
+source/model changes (applied on Resume if paused), and replay reset tracking and selection. Pause freezes
 both playback and inference. Cameras remain live, without pause or replay.
 Invalid/non-finite/out-of-duration seek requests fail explicitly. Cleanup drains
 decoder pipes after termination to avoid deadlock on read-ahead output.
@@ -82,6 +83,46 @@ Clear target cancels both the viewer highlight and backend identity context.
 The red highlight is local to the viewer, not baked into H.264. The existing CLI
 command remains a detector verification, not the interactive tracking player.
 
+### Detection visibility and low FPS (2026-10-14)
+
+Detection visibility is independent of identity confirmation. Previously the
+session exported only ByteTrack's confirmed output, so sampled fast motion at
+1 FPS could return zero visible boxes indefinitely even when every model frame
+contained a 0.9-confidence detection. A 0.15-confidence detection with a 0.10
+display threshold was also hidden by the separate 0.20 track activation gate.
+
+The tracker now retains display-eligible detections and carries each original
+detection index through Supervision's matched rows. The session adds unmatched
+observations back after the identity adapter, without duplicating matched boxes
+or inventing IDs. Untracked entries have `id:null`, `tracked:false` and a
+`detection_index`; confirmed entries keep their real ID. Only confirmed IDs enter
+motion/topology/selected-identity logic. The SVG labels untracked boxes as
+Detected and does not make them selectable. `detections` counts eligible observed
+boxes; `tracks` and `untracked` report the separate current-frame counts.
+Identity gates, bridge lifetime and consecutive confirmation remain unchanged.
+
+FPS still changes which video frames are sampled and how well motion can be
+associated. It must not hide an observed box solely because tracking failed.
+Metadata includes `dt_ms`, so a 1-FPS detection remains visible for its actual
+displayed frame instead of using a fixed high-FPS expiration window.
+
+Acceptance: a deterministic moving-box replay changed from ten zero-box frames
+at 1 FPS to one observed box on every frame, with tracking on/off and scores
+0.9/0.15. The regression reaches the real Session → ByteTrack → Identity seam,
+with only model inference supplied as a fixture. A read-only conversion-002
+replay used identical decoded pixels from four retained 4K/30-FPS dashcam frames:
+PT, ONNX and LiteRT each produced 8/9/6/5 eligible boxes at confidence 0.25,
+and displayed all of them at configured 1/5/15 FPS despite no confirmed IDs.
+This is same-frame visibility acceptance, not an assertion that different FPS
+sampling schedules always produce identical model detections.
+Deployed WebSocket acceptance then ran the actual GStreamer decode/inference/
+H.264 path with conversion-002 ONNX at 1 FPS: the first three frames carried
+8/8/7 detection boxes with no confirmed IDs and valid encoded video bytes. The
+test stopped its own session and did not modify uploaded files or annotations.
+The deployed browser player also decoded the video and rendered eight Detected
+SVG boxes at media time 1.016 s with zero track buttons. This verifies the
+playback-time overlay, not only the backend metadata.
+
 ### Osiris identity tuning and visualization (2026-09-29)
 
 The detector adapter `Yolo26nTrackingPlugin.py` itself does not implement topology.
@@ -103,8 +144,17 @@ fail-open behavior when motion/innovation is unavailable). This is not appearanc
 ReID and does not guarantee recovery after severe shake or long disappearance.
 
 `Tracking` follows Inference. Its parameter-group dropdown offers ByteTrack,
-Kalman motion, Identity/topology, and Predictive bridge. Settings are immutable
-during a session; Stop then Start/Replay applies edits. The legacy API YAML import accepts an
+Kalman motion, Identity/topology, and Predictive bridge. Algorithm settings are
+immutable within one backend session. For uploaded videos, Pause unlocks model,
+schema, output, inference and tracking controls while retaining the displayed
+frame and exact absolute media position. Changes remain drafts with a visible
+pending notice. Resume waits for the old session to release its slot, then loads
+the latest settings from that position with fresh tracking/MSE buffers. It never
+silently resumes old inference or jumps to zero. Invalid settings or an
+uninspected local path disable Resume without clearing the paused frame.
+Unchanged settings, annotation size and visualization-only edits resume the
+original session without resetting tracking. Changing the input video/camera
+still requires Stop. Cameras remain live-only. The legacy API YAML import accepts an
 `env:` mapping or a flat mapping, ignores unrelated settings, rejects unknown
 tracking keys/nonfinite/out-of-range values, and limits input to 64 KiB. Export
 previously downloaded the supported tracking settings; the current UI exports
@@ -112,6 +162,27 @@ plain JSON instead (see 2026-10-01 update below). The legacy import API never
 overwrites source YAML. Imported defaults are a snapshot, not live synchronization.
 Endpoints: `GET /api/stream-demo/tracking-settings` and
 `POST /api/stream-demo/tracking-settings/import` (raw YAML).
+
+### Parameter help and direct numeric editing (2026-10-15)
+
+Every displayed tracking/optical-flow setting has a `?` help trigger describing
+its purpose and higher/lower trade-offs (or on/off and categorical effects).
+The text distinguishes visual-only controls from computation, selected-target
+bridge conditions, normalized distance from pixels, and matching cost from IoU.
+Help follows the selected English/Chinese/Japanese/Korean language and stays
+available when its control is disabled. Radix Tooltip provides hover, keyboard
+focus, tap/click and Escape dismissal, with portal/collision handling for narrow
+cards. Opening help never toggles its associated checkbox.
+
+Numeric settings retain a local text draft while editing. Enter or blur commits
+only finite in-range values; integer settings reject fractions instead of silently
+truncating them. Escape restores the last committed value. Empty/intermediate
+digits are not overwritten during frame/stat updates. Invalid tracking drafts
+block Start/Resume and survive parameter-group changes until corrected or Reset
+defaults; invalid optical-flow drafts leave the last valid Worker configuration
+running. Displayed range hints explain the accepted values. This fixes Grid
+columns reverting to 12 immediately when cleared, before a replacement could
+be typed. Algorithms and defaults are unchanged.
 
 Stream config carries `tracking_settings`. Clicks send
 `{type:"select_track", id, time}` with the displayed metadata frame timestamp.
@@ -123,6 +194,81 @@ clears all raw/motion/reference/confirmation history. Kalman dt, TTL and identit
 age use frame_index/output_fps, matching the decoded/encoded media timeline;
 inference latency and pauses do not artificially age a file's target. Camera
 timing uses the fixed-rate output timeline, not original sensor capture PTS.
+
+### Independent optical-flow visualization (2026-10-15)
+
+`Show optical flow` adds a separate default-off canvas layer to Web UI camera
+and uploaded-video playback. It is independent of detector boxes, ByteTrack
+confirmation and the tracking-overlay master. The dependency-free Flow Lens
+pyramidal Lucas–Kanade core was adapted from the operator's local `v2i/index.html`;
+the application does not load that external file at runtime.
+
+Defaults: 12×12 grid, 640px analysis maximum edge, radius 5, texture threshold 3,
+3× arrows and 30 retained trail samples. Controls offer flow/brightness-gradient
+arrows; displacement, speed, direction, gradient and texture-quality coloring;
+grid, points, trails, gain, history length and reset. Lost or low-texture points
+are orange crosses and reseed at their grid location on the next sample.
+Statistics exclude invalid points. Units use decoded stream pixels and media
+time, not original 4K source pixels, wall-clock speed or real-world velocity.
+Texture quality is not calibrated accuracy; brightness gradient is not motion.
+
+A bundled module Worker processes at most one transferable grayscale frame at
+a time, coalescing busy callbacks to the latest displayed frame. There is no
+full-video analysis/image cache or extra server inference. Disabled/stopped/CLI
+display has no flow Worker or capture loop. Pause retains the last layer;
+visual-only edits repaint it without restarting inference. Sampling changes,
+reset, seek or a new inference session rebuild the reference and clear trails.
+First references do not claim motion. Slow stale results are suppressed; Worker
+failures/timeouts affect only flow and expose reset/retry guidance.
+UI statistics are throttled during playback and explicitly flushed on pause,
+so a quickly paused measured frame cannot retain stale reference-only numbers.
+
+### Detection-first overlays and model switching (2026-10-15)
+
+Observation defaults are 15 FPS, Kalman enabled, predictive bridge enabled,
+maximum prediction 800 ms, bridge TTL 800 ms and at most 12 missed frames.
+The first time/frame limit reached wins. The short cyan forecast remains capped
+at 200 ms. Missing-observation bridging still requires a selected, previously
+confirmed target and valid motion; the new defaults do not invent trajectories
+for never-confirmed detections or add all-object missing-track bridges.
+
+Web UI playback defaults to detection boxes and confidence. Opening the Tracking
+panel does not enable overlays: check **Show tracking overlays** first, then
+independently toggle trails, prediction, topology, and diagnostics. These switches
+are live rendering preferences, not algorithm settings. Turning overlays off
+hides IDs, synthetic bridge boxes and geometry, never observed detections.
+The panel reports metadata for the currently displayed frame and explicitly
+explains missing confirmed IDs. At low FPS it warns when the frame interval
+exceeds Kalman state lifetime; no motion or topology is fabricated for untracked
+detections. Topology additionally needs neighboring confirmed tracks.
+
+Annotation size below IoU controls 8–24 screen-pixel labels during playback,
+including diagnostics, without restarting inference. Both tracking-on and
+tracking-off sessions send timestamped box metadata; annotations are not baked
+into Web UI video. Terminal command output remains command-controlled.
+
+Changing model source retires any terminal display before accepting the change;
+stop failures preserve the existing source. Editing a local path invalidates its
+inspection token and disables Start until reinspection. Inspecting prepares a
+selection; Start loads it. A successful `started` message includes the resolved
+`model: {model_id, path, format}` after loading, displayed under the monitor.
+This identifies the actual session model, not the current conversion assignment.
+Terminal model selection is explicitly determined by the executed command.
+
+Read-only replay of conversion-002 PT on the uploaded dashcam video at 640×360
+and confidence 0.25: 1 FPS produced 28 observed boxes across four sampled frames
+and zero confirmed tracks. 15 FPS produced 333 observed boxes across 46 frames,
+68 confirmed-track observations, 27 valid motion/trail/forecast observations
+and 110 neighbor links. Counts aggregate different sampling rates, not accuracy
+scores; detector visibility remains independent of confirmation.
+
+Deployed Web UI acceptance also loaded two local PT files in sequence: the
+project's `output_model/runs/train-6/weights/best.pt` and `/app/output_model/best.pt`.
+Each returned its own inspected token and exact server-confirmed loaded path.
+Across the first 30 metadata frames, observed-box totals were 236 and 114,
+respectively; both emitted actual motion and topology metadata. Browser tests
+verified overlay gating and 8px screen-sized labels at 375/768/1440px without
+writing project labels, versions, or assignments.
 
 Optional live visualization layers: Kalman history (up to 2 seconds, sampled to
 24 points), ≤200 ms bounded forecast and velocity segment, posterior center 2σ

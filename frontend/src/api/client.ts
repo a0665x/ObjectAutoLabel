@@ -52,6 +52,25 @@ export type SplitSample = {
 
 export type SplitSamples = Record<"train" | "valid" | "test", SplitSample[]>;
 
+export type SplitBucket = keyof SplitSamples;
+export type SplitCoverageCounts = Record<SplitBucket, number>;
+export type SplitCoverageGroup = {
+  id:string; name:string; kind:'pseudo'|'augment'|'open_data'; source_name:string|null;
+  source_asset_id:string|null; pseudo_label_run_id:string|null; pseudo_name:string|null;
+  augmentation_run_id:string|null; augmentation_name:string|null; open_data_import_id:string|null; open_data_name:string|null;
+  counts:SplitCoverageCounts; bucket_share:SplitCoverageCounts; total:number;
+};
+export type SplitCoverage = {
+  split_id:string; split_name:string; provenance:'frozen'|'legacy'; seed:number|null; ordering:string;
+  total:number; all_counts:SplitCoverageCounts; counts:SplitCoverageCounts; groups:SplitCoverageGroup[]; group_id:string|null;
+  window:{start:number;end:number;first_index:number;last_index:number;count:number}; window_counts:SplitCoverageCounts;
+  bins:Array<{index:number;first_index:number;last_index:number;counts:SplitCoverageCounts}>;
+};
+export type SplitCoverageSample = {
+  image_id:string; file_name:string; bucket:SplitBucket; group_id:string; group_name:string;
+  index:number; total:number; thumbnail_url:string;
+};
+
 export type FileBrowserEntry = { name: string; path: string; kind: "directory" | "file"; selectable: boolean; match_count: number };
 export type FileBrowserShortcut = { label: string; path: string; description: string; exists: boolean; match_count: number };
 export type FileBrowserResult = { path: string; parent?: string | null; mode: string; current_match_count: number; shortcuts: FileBrowserShortcut[]; entries: FileBrowserEntry[] };
@@ -286,6 +305,16 @@ export const api = {
   datasetSplits: (projectId: string) => request<DatasetSplitRun[]>(`/api/projects/${projectId}/dataset-splits`),
   datasetSplitSamples: (projectId: string, splitId: string, limitPerBucket = 6, sampleSeed?: number) =>
     request<SplitSamples>(buildDatasetSplitSamplesPath(projectId, splitId, limitPerBucket, sampleSeed)),
+  datasetSplitCoverage: (projectId:string, splitId:string, options:{group_id?:string;start?:number;end?:number;bins?:number}={}, signal?:AbortSignal) => {
+    const params=new URLSearchParams();
+    for(const [key,value] of Object.entries(options)) if(value!==undefined)params.set(key,String(value));
+    return request<SplitCoverage>(`/api/projects/${projectId}/dataset-splits/${splitId}/coverage?${params}`,{signal});
+  },
+  datasetSplitCoverageSample: (projectId:string, splitId:string, bucket:SplitBucket, position:number, groupId?:string, signal?:AbortSignal) => {
+    const params=new URLSearchParams({bucket,position:String(position)});
+    if(groupId)params.set('group_id',groupId);
+    return request<SplitCoverageSample>(`/api/projects/${projectId}/dataset-splits/${splitId}/coverage-sample?${params}`,{signal});
+  },
   trainingRuns: (projectId: string) => request<TrainingRun[]>(`/api/projects/${projectId}/training-runs`),
   deleteHistory: (projectId: string, artifactType: "source" | "open_data" | "pseudo" | "augmentation" | "split" | "training" | "conversion" | "export", artifactId: string) =>
     request<{ deleted: Record<string, number>; removed_paths: string[] }>(

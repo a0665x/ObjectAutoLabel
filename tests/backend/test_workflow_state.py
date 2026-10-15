@@ -45,6 +45,41 @@ def test_assignment_persists_and_is_project_scoped(data):
     assert read_state(repo, other['id'])['assignments'] == {}
 
 
+@pytest.mark.parametrize('stage',['split','training','conversion','composition'])
+def test_assigning_saved_split_restores_its_pseudo_source_instead_of_previous_source(data,stage):
+    repo,pid,first,_,image=data
+    root=Path(repo.get_project(pid)['root_path'])
+    source=repo.create_source_asset(pid,'image_folder',str(root/'sources'))
+    other=repo.create_source_asset(pid,'image_folder',str(root/'other'))
+    repo.db.execute('update images set source_asset_id = ? where id = ?',(source['id'],image['id']))
+    repo.db.execute('update pseudo_label_runs set source_asset_id = ? where id = ?',(source['id'],first['id']))
+    other_path=root/'other'/'b.jpg';other_path.parent.mkdir();other_path.write_bytes(b'image')
+    repo.create_image(pid,str(other_path),source_asset_id=other['id'],width=100,height=100)
+    repo.db.commit()
+    assign(repo,pid,'source',other['id'])
+    split=repo.create_dataset_split_record(pid,'retained',.8,.1,.1,'/unused','/unused/data.yaml','{}',pseudo_label_run_id=first['id'])
+    selected_id=split['id']
+    if stage in ('training','conversion'):
+        training=repo.create_training_run_record(pid,split['id'],'model.pt','/unused',run_name='Train')
+        repo.update_training_run(training['id'],status='completed')
+        selected_id=training['id']
+        if stage=='conversion':
+            conversion=repo.create_model_conversion_run(pid,training['id'],'/unused/best.pt','Convert','/unused',None,'people',[],status='completed')
+            selected_id=conversion['id']
+    if stage=='composition':
+        state=save_composition(repo,pid,CompositionCreate(name='Saved recipe',pseudo_label_run_id=first['id']))
+        assert state['assignments']['source']==source['id']
+        assign(repo,pid,'source',other['id'])
+        app=FastAPI();app.include_router(create_workflow_router(lambda:repo));client=TestClient(app)
+        state=client.post(f"/api/projects/{pid}/compositions/{state['compositions'][0]['id']}/assign").json()
+    else:
+        state=assign(repo,pid,stage,selected_id)
+    assert state['assignments']['source']==source['id']
+    assert state['assignments']['pseudo']==first['id']
+    if stage!='composition':
+        assert state['assignments']['split']==split['id']
+
+
 def test_composition_saved_assigned_and_cannot_mix_augment_parents(data):
     repo, pid, first, second, image = data
     augment = repo.create_augmentation_run_record(project_id=pid, pseudo_label_run_id=first['id'], name='aug', output_dir='/unused', settings_json='{}', source_image_count=1, created_image_count=1, source_image_ids=[image['id']])

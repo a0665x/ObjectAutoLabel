@@ -3,6 +3,20 @@ from backend.app.stream_identity import IdentityTracker
 from backend.app.tracking_settings import TrackingSettings
 import pytest
 
+def test_observation_defaults_keep_selected_prediction_for_800ms_or_12_misses():
+    settings=TrackingSettings()
+    assert settings.TRACK_MOTION_KALMAN_ENABLE is True
+    assert settings.TRACKING_BRIDGE_ENABLE is True
+    assert settings.TRACK_MOTION_MAX_PREDICTION_MS==800
+    assert settings.TRACKING_BRIDGE_TTL_MS==800
+    assert settings.TRACKING_BRIDGE_MAX_MISSES==12
+    tracker=IdentityTracker(settings,640,360)
+    for i in range(5):tracker.update(objects(),i/15)
+    tracker.select('0:1',4/15)
+    for i in range(5,17):
+        assert any(o.get('predicted') for o in tracker.update([],i/15))
+    assert tracker.update([],17/15)==[]
+
 def objects(raw=1, shift=0):
     return [dict(id=f'0:{raw}',box=[100+shift,100,150+shift,160],score=.9,class_id=0,name='person'),
             dict(id='1:1',box=[180+shift,100,220+shift,140],score=.9,class_id=1,name='car')]
@@ -26,7 +40,7 @@ def test_bridge_expires_on_media_time_not_wall_time():
     tracker.select('0:1',4/15)
     tracker.update(objects(),5/15)
     assert any(o.get('predicted') for o in tracker.update([],6/15))
-    assert tracker.update([],1.0)==[]
+    assert tracker.update([],1.2)==[]
     assert tracker.debug['state']=='lost'
 
 
@@ -95,7 +109,7 @@ def test_selection_uses_clicked_snapshot_and_rejects_evicted_frames():
 
 @pytest.mark.parametrize('fps',[5,15,30,60])
 def test_bridge_time_limit_at_different_fps(fps):
-    tracker=IdentityTracker(TrackingSettings(TRACKING_BRIDGE_MAX_MISSES=120),640,360)
+    tracker=IdentityTracker(TrackingSettings(TRACK_MOTION_MAX_PREDICTION_MS=400,TRACKING_BRIDGE_TTL_MS=400,TRACKING_BRIDGE_MAX_MISSES=120),640,360)
     for i in range(5): tracker.update(objects(),i/fps)
     tracker.select('0:1',4/fps)
     for i in range(5,5+fps):

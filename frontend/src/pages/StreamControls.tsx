@@ -1,4 +1,6 @@
 import { useId } from 'react';
+import {ParameterHelp} from './ParameterHelp';
+import type {Language} from '../types';
 
 // Native radio/checkbox semantics preserve keyboard navigation and form disabling.
 export function StreamSegments({label, value, options, onChange, disabled=false, hideLabel=false}: {
@@ -18,13 +20,14 @@ export function StreamSegments({label, value, options, onChange, disabled=false,
   </fieldset>;
 }
 
-export function StreamSwitch({label, checked, onChange, disabled=false, ariaLabel}: {
-  label:string; checked:boolean; onChange:(checked:boolean)=>void; disabled?:boolean; ariaLabel?:string;
+export function StreamSwitch({label, checked, onChange, disabled=false, ariaLabel,help,language='en',technicalKey}: {
+  label:string; checked:boolean; onChange:(checked:boolean)=>void; disabled?:boolean; ariaLabel?:string;help?:string;language?:Language;technicalKey?:string;
 }) {
-  return <label className="stream-switch">
+  const control=<label className="stream-switch">
     <span>{label}</span>
     <input type="checkbox" role="switch" aria-label={ariaLabel??label} checked={checked}
       disabled={disabled} onChange={event=>onChange(event.target.checked)}/>
     <span className="stream-switch-track" aria-hidden="true"/>
   </label>;
+  return help?<div className="stream-switch-with-help">{control}<ParameterHelp label={label} help={help} language={language} technicalKey={technicalKey}/></div>:control;
 }

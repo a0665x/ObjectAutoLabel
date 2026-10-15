@@ -3,10 +3,30 @@ import type { Language } from '../types';
 // Keep runtime keys stable; translate presentation independently of the API.
 type Text = readonly [string, string, string, string];
 const words = {
+  pausedState: ['Paused','已暫停','一時停止中','일시 중지됨'],
+  verifiedPausedModel: ['Verified path · Resume to load','已確認路徑 · 繼續播放時載入','確認済みパス · 再開時に読み込む','확인된 경로 · 재개 시 로드'],
+  pausedEditing: ['Paused. Edit inference, output or tracking settings, then Resume from this position.','已暫停。可調整推論、輸出或追蹤設定，再從此位置繼續播放。','一時停止中。推論・出力・追跡設定を変更し、この位置から再開できます。','일시 중지됨. 추론·출력·추적 설정을 변경한 뒤 이 위치에서 재개하세요.'],
+  pausedPending: ['Pending changes. Resume applies them from this position and resets tracking. The paused image still uses the previous settings.','有尚未套用的修改。繼續播放會從此位置套用並重設追蹤；目前暫停畫面仍是修改前的結果。','未適用の変更があります。再開時にこの位置から適用し、追跡をリセットします。停止画像は変更前の結果です。','적용 대기 중인 변경이 있습니다. 재개 시 이 위치부터 적용하고 추적을 초기화합니다. 정지 화면은 이전 설정의 결과입니다.'],
+  invalidParameters: ['Correct out-of-range tracking values before starting or resuming.','請先修正超出範圍的追蹤參數，再開始或繼續播放。','開始・再開する前に範囲外の追跡設定を修正してください。','시작하거나 재개하기 전에 범위를 벗어난 추적 설정을 수정하세요.'],
+  overlay: ['Show tracking overlays','疊加追蹤資訊','追跡情報を重ねる','추적 정보 표시'],
+  overlayOff: ['Detection boxes and confidence only. Tracking overlays are off.','僅顯示偵測框與信心值；追蹤資訊疊加未開啟。','検出枠と信頼度のみ。追跡情報は非表示です。','검출 상자와 신뢰도만 표시합니다. 추적 정보는 꺼져 있습니다.'],
+  trackingOff: ['Tracking computation is off. Pause, enable tracking, then Resume; detections stay visible.','追蹤計算未啟用；可暫停並啟用追蹤後繼續播放，偵測框仍會顯示。','追跡処理が無効です。一時停止して追跡を有効化し、再開してください。検出枠は表示されます。','추적 계산이 꺼져 있습니다. 일시 중지 후 추적을 켜고 재개하세요. 검출은 계속 표시됩니다.'],
+  waitingFrames: ['Waiting for displayed frames.','等待播放影格。','再生フレームを待機中。','표시할 프레임을 기다리는 중입니다.'],
+  waitingIds: ['No confirmed IDs in this displayed frame. Detections remain visible; Kalman and topology need confirmed tracks.','目前播放影格尚無已確認 ID。偵測框照常顯示；Kalman 與拓撲需先有穩定追蹤。','表示中のフレームには確定IDがありません。検出は表示されます。Kalmanと近傍関係には確定追跡が必要です。','현재 프레임에 확정 ID가 없습니다. 검출은 표시되며 Kalman과 이웃 연결에는 확정 추적이 필요합니다.'],
+  slowMotion: ['Frame interval exceeds Kalman state lifetime. Motion may restart every frame; increase FPS or adjust prediction lifetime before restarting.','影格間隔已超過 Kalman 狀態保留時間，運動估計可能每幀重設；可提高 FPS 或調整預測期限後重新開始。','フレーム間隔がKalman状態の保持時間を超えています。FPSまたは予測期限を調整して再開してください。','프레임 간격이 Kalman 상태 수명을 초과합니다. FPS나 예측 수명을 조정한 후 다시 시작하세요.'],
+  displayed: ['Displayed frame','目前播放影格','表示フレーム','현재 표시 프레임'],
+  detections: ['detections','偵測','検出','검출'],
+  forecasts: ['forecasts','預測','予測','예측'],
+  links: ['neighbor links','鄰近連線','近傍リンク','이웃 연결'],
+  annotationSize: ['Annotation size','標註字體大小','注釈の文字サイズ','주석 크기'],
+  terminalSize: ['Terminal labels are drawn by the command; this slider applies to Web UI playback.','Terminal 字體由執行指令決定；此滑桿僅作用於 Web UI 播放。','Terminalの文字はコマンドで描画されます。この設定はWeb UI再生用です。','Terminal 라벨은 명령에서 그립니다. 이 슬라이더는 Web UI 재생에 적용됩니다.'],
+  runningModel: ['Running model','正在執行的模型','実行中のモデル','실행 중인 모델'],
+  verifiedModel: ['Verified path · press Start to load','已確認路徑 · 按開始載入','確認済みパス · 開始で読み込む','확인된 경로 · 시작으로 로드'],
+  terminalModel: ['Terminal model is determined by the executed command, not the Model input selector.','Terminal 使用的模型由執行指令決定，不是上方 Model input 選項。','Terminalのモデルは実行コマンドで決まります。上の選択ではありません。','Terminal 모델은 실행 명령으로 결정되며 위 모델 선택과는 별개입니다.'],
   parameterDetails: ['Details & trade-offs','參數詳情與取捨','詳細とトレードオフ','세부 정보 및 장단점'],
   parameters: ['Algorithm parameters','演算法參數','アルゴリズム設定','알고리즘 매개변수'],
   title: ['Tracking · motion / topology','追蹤 · 運動／拓撲','追跡 · 動き／トポロジー','추적 · 움직임 / 토폴로지'],
-  intro: ['Stop playback to change tracking parameters. Visualization can be changed while playing.','停止播放後可調整追蹤參數；視覺化可在播放中切換。','追跡パラメータの変更は再生停止後に行います。表示は再生中も切り替えられます。','추적 매개변수는 재생을 중지한 후 변경하세요. 시각화는 재생 중에도 전환할 수 있습니다.'],
+  intro: ['Pause to edit tracking parameters; Resume applies changes from the paused position and resets tracking. Visualization changes immediately.','暫停即可調整追蹤參數；繼續播放會從暫停位置套用並重設追蹤。視覺化可即時切換。','一時停止して追跡設定を変更できます。再開時に停止位置から適用し、追跡をリセットします。表示は即時に切り替えられます。','일시 중지 후 추적 설정을 변경하세요. 재개 시 중지 위치에서 적용하고 추적을 초기화합니다. 시각화는 즉시 바뀝니다.'],
   group: ['Parameter group','參數群組','パラメータグループ','매개변수 그룹'],
   motion: ['Kalman motion','Kalman 運動估計','Kalman 運動推定','Kalman 움직임 추정'],
   identity: ['Identity / topology','目標識別／拓撲','ID／トポロジー','ID / 토폴로지'],
@@ -30,7 +50,10 @@ const words = {
   selectHint: ['Click a tracked box to select it','點擊追蹤框以選取目標','追跡枠をクリックして選択','추적 상자를 클릭하여 선택'],
   clear: ['Clear target','取消選取','選択を解除','선택 해제'],
   track: ['Track','追蹤','追跡','추적'],
-  objects: ['Tracked objects','追蹤物件','追跡対象','추적 객체'],
+  detectedOnly: ['Detected','偵測框','検出枠','검출'],
+  confirmedTracks: ['tracked IDs','追蹤 ID','追跡ID','추적 ID'],
+  detectionHint: ['Detection boxes remain visible without a confirmed tracking ID. Lower FPS may change sampled frames and ID continuity.','沒有確認的追蹤 ID 時仍顯示偵測框；低 FPS 可能改變取樣影格與 ID 連續性。','追跡IDが未確定でも検出枠は表示します。低FPSでは抽出フレームやIDの連続性が変わる場合があります。','추적 ID가 확정되지 않아도 검출 상자는 표시됩니다. 낮은 FPS는 샘플 프레임과 ID 연속성에 영향을 줄 수 있습니다.'],
+  objects: ['Detected and tracked objects','偵測與追蹤物件','検出・追跡対象','검출 및 추적 객체'],
   lost: ['Target lost — waiting','目標遺失，等待恢復','対象を見失いました · 待機中','대상을 놓쳤습니다 · 대기 중'],
   raw: ['raw','原始','元ID','원본'],
   warmup: ['warmup','初始化','初期化中','초기화 중'],
@@ -84,6 +107,34 @@ const help = {
 } satisfies Record<string, Text>;
 
 const index: Record<Language, number> = {en:0,zh:1,ja:2,ko:3};
+const meanings:Record<keyof typeof help,Text>={
+  AI_TRACK_MINIMUM_MATCHING_THRESHOLD:['How permissive ByteTrack is when linking detections across frames; this is a matching-cost limit, not the detector IoU slider.','ByteTrack 將前後影格偵測框接成同一 ID 時的容忍程度；這是配對成本上限，不是偵測的 IoU 滑桿。','ByteTrackがフレーム間の検出を同じIDに対応付ける許容度。検出IoUではなく対応コストの上限です。','ByteTrack이 프레임 간 검출을 같은 ID로 연결하는 허용도입니다. 검출 IoU가 아닌 매칭 비용 상한입니다.'],
+  TRACK_MOTION_KALMAN_ENABLE:['Estimates position and velocity from confirmed track history. Requires tracking IDs; it does not create detections.','根據穩定追蹤的歷史估計位置與速度；需先有追蹤 ID，不會憑空產生偵測。','確定した追跡履歴から位置と速度を推定します。追跡IDが必要で、検出を作る機能ではありません。','확정 추적 이력으로 위치와 속도를 추정합니다. 추적 ID가 필요하며 검출을 생성하지 않습니다.'],
+  TRACK_MOTION_MAX_PREDICTION_MS:['Maximum time to extrapolate a selected target after its last trusted observation, in milliseconds. Does not lengthen the short cyan forecast.','選中目標最後一次可靠觀測後，最多向前推估多久（毫秒）；不會延長青色短期預測。','選択対象の最後の信頼できる観測後、何ミリ秒先まで予測するか。水色の短期予測は延長しません。','선택 대상의 마지막 신뢰 관측 이후 예측할 최대 밀리초입니다. 짧은 청록색 예측은 늘어나지 않습니다.'],
+  TRACKING_ID_STABILIZER_ENABLE:['Attempts to preserve your clicked target when the underlying tracker changes its ID. Not appearance-based re-identification.','底層追蹤 ID 改變時，嘗試維持你點選的同一目標；不是依外觀辨識的 ReID。','追跡元のIDが変わったとき、クリックした対象の同一性を保とうとします。外観による再識別ではありません。','원래 추적 ID가 바뀌어도 클릭한 대상의 동일성을 유지하려 합니다. 외형 기반 재식별은 아닙니다.'],
+  TRACKING_ID_DIRECT_MAX_INNOVATION_NORM:['Largest allowed gap between the predicted position and an observation carrying the same raw ID; guards against sudden ID swaps.','同一原始 ID 的觀測位置，與預測位置最多可差多遠，用來防止目標突然跳到別人身上。','同じ元IDの観測と予測位置に許す距離で、突然のID入替を防ぎます。','동일 원본 ID의 관측과 예측 위치 사이에 허용하는 거리로 갑작스러운 ID 바뀜을 막습니다.'],
+  TRACKING_ID_STABILIZER_MAX_ANCHORS:['Maximum nearby tracked objects used as reference points to identify the selected target.','最多使用幾個鄰近追蹤物件作為參考，協助辨認選中目標。','選択対象の識別に参照する近傍追跡物体の最大数です。','선택 대상 식별에 기준으로 쓰는 주변 추적 객체의 최대 수입니다.'],
+  TRACKING_ID_STABILIZER_ANCHOR_RADIUS_NORM:['How far around the target to search for neighboring reference objects, in normalized image coordinates rather than pixels.','在目標周圍多遠的範圍尋找鄰居參考；使用正規化影像距離，不是像素。','近傍参照物体を探す範囲。ピクセルではなく正規化した画像座標の距離です。','주변 기준 객체를 찾는 범위입니다. 픽셀이 아닌 정규화 영상 좌표 거리입니다.'],
+  TRACKING_ID_STABILIZER_MATCH_THRESHOLD:['Minimum combined position/motion/neighborhood score needed to accept a recovery candidate.','恢復目標時，候選物件的位置、運動與鄰居關係綜合分數至少要多少。','復元候補の位置・動き・近傍関係を合わせた最低スコアです。','복구 후보의 위치·움직임·이웃 관계를 종합한 최소 점수입니다.'],
+  TRACKING_ID_STABILIZER_MATCH_MARGIN:['Required score lead of the best recovery candidate over the runner-up.','恢復候選第一名必須比第二名多出多少分，避免兩個物件太相似時誤選。','復元候補の1位が2位を上回る必要のある得点差です。','최상위 복구 후보가 두 번째 후보보다 앞서야 하는 점수 차이입니다.'],
+  TRACKING_ID_STABILIZER_CONFIRM_FRAMES:['Consecutive accepted observations required before switching the selected identity to a recovered candidate.','同一恢復候選必須連續通過幾幀，才把選取目標接回該候選。','復元候補に選択IDを切り替えるまでに必要な連続確認回数です。','선택 ID를 복구 후보로 전환하기 전에 필요한 연속 확인 수입니다.'],
+  TRACKING_ID_STABILIZER_LOW_EVIDENCE_CONFIRM_FRAMES:['Extra-conservative confirmation count used when motion or neighbor evidence is insufficient.','缺乏運動或鄰居證據時，改用較保守的連續確認幀數。','動きや近傍の証拠不足時に使う、より慎重な連続確認回数です。','움직임·이웃 근거가 부족할 때 쓰는 보수적인 연속 확인 수입니다.'],
+  TRACKING_ID_STABILIZER_REACQUIRE_BLEND_FRAMES:['Number of frames used to ease the recovered selected box back toward its observed position.','目標恢復後，用幾幀讓選取框逐步移回觀測位置，避免突然跳動。','復元した選択枠を観測位置へ滑らかに戻すフレーム数です。','복구한 선택 상자를 관측 위치로 부드럽게 이동시키는 프레임 수입니다.'],
+  TRACKING_ID_STABILIZER_MAX_AGE_MS:['How long the last trusted identity reference remains usable after the selected target disappears; milliseconds, not frames.','選中目標消失後，最後可靠的識別參考可保留多久；單位是毫秒，不是幀數。','選択対象の消失後に信頼できるID参照を保持する時間。単位はフレームではなくミリ秒です。','선택 대상 소실 후 신뢰 ID 기준을 유지하는 시간입니다. 프레임이 아닌 밀리초입니다.'],
+  TRACKING_BRIDGE_ENABLE:['Bridges brief missing detections for the selected, previously confirmed target only; it does not invent boxes for every missing object.','僅為「已點選且曾穩定追蹤」的目標補上短暫缺測預測，不會對所有遺失物件憑空補框。','選択済みで確定追跡のあった対象の短い欠測だけを補います。全ての消失物体に枠を作る機能ではありません。','선택했으며 확정 추적된 대상의 짧은 누락만 보완합니다. 모든 소실 객체의 상자를 만들지는 않습니다.'],
+  TRACKING_BRIDGE_TTL_MS:['Maximum elapsed missing-detection time before hiding the selected target’s red dashed prediction box.','選中目標缺測多久後，停止顯示紅色虛線預測框；單位毫秒。','選択対象の赤い破線予測枠を表示する欠測時間の上限（ミリ秒）です。','선택 대상의 빨간 점선 예측 상자를 유지하는 누락 시간 상한(밀리초)입니다.'],
+  TRACKING_BRIDGE_MAX_MISSES:['Maximum consecutive missing frames allowed for the selected-target prediction.','選中目標最多可連續缺測幾幀，超過就停止補上預測框。','選択対象の予測で許す連続欠測フレーム数です。','선택 대상 예측에 허용하는 연속 누락 프레임 수입니다.'],
+  TRACKING_BRIDGE_CONF_DECAY:['Fraction of confidence retained at each missing frame, not detector confidence or a match threshold.','每次缺測後保留多少比例的預測信心，不是偵測信心門檻或配對門檻。','欠測フレームごとに保持する予測信頼度の割合。検出や対応付けの閾値ではありません。','누락 프레임마다 유지할 예측 신뢰도 비율입니다. 검출 신뢰도나 매칭 임계값이 아닙니다.'],
+};
+const visualizationHelp={
+  compute:['On: assigns object tracking IDs and computes motion/identity evidence. Off: runs detection only; boxes and confidence remain visible. Pause before changing this; Resume starts tracking afresh from that position. Overlay switches only control drawing.','開啟：分配物件追蹤 ID，計算運動與目標識別證據；關閉：只做偵測，框與信心值仍會顯示。先暫停再修改，繼續播放時從該位置重新建立追蹤；疊加開關只控制畫法。','オン：追跡IDと動き・識別情報を計算。オフ：検出枠と信頼度のみ。一時停止して変更し、再開位置から追跡を再初期化します。表示スイッチとは別です。','켜짐: 추적 ID와 움직임·식별 근거를 계산합니다. 꺼짐: 검출 상자와 신뢰도는 유지합니다. 일시 중지 후 변경하면 재개 위치에서 추적을 다시 시작합니다. 표시 스위치와는 별개입니다.'],
+  enabled:['On: adds the selected tracking details over detector boxes. Off: shows detection boxes and confidence only. Does not enable tracking computation; confirmed IDs are still needed for motion/topology.','開啟：在偵測框上疊加下方勾選的追蹤細節；關閉：只顯示偵測框與信心值。不會自動啟用追蹤計算；運動與拓撲仍需先有穩定 ID。','オン：検出枠に追跡情報を重ねます。オフ：検出枠と信頼度のみ。追跡計算は有効化されず、動きや近傍関係には確定IDが必要です。','켜짐: 검출 위에 추적 세부 정보를 표시합니다. 꺼짐: 검출과 신뢰도만 표시합니다. 추적 연산을 켜는 기능은 아니며 움직임·연결에는 확정 ID가 필요합니다.'],
+  trails:['On: shows up to two seconds of confirmed, smoothed track-center history. Off: hides the lines. No stable ID means no trail. Display only; detections are unchanged.','開啟：顯示最長兩秒的穩定追蹤中心平滑軌跡；關閉：隱藏歷史線。沒有穩定 ID 就不會有軌跡。只影響顯示，偵測框不受影響。','オン：確定追跡の中心履歴を平滑化して最大2秒表示。オフ：線を隠します。安定IDが必要です。検出は変わりません。','켜짐: 확정 추적 중심의 평활 이력을 최대 2초 표시합니다. 꺼짐: 선을 숨깁니다. 안정 ID가 필요하며 검출은 변하지 않습니다.'],
+  prediction:['On: shows short cyan Kalman forecasts (up to 200 ms), velocity and uncertainty after motion warmup. A red dashed missing-target box additionally needs a selected confirmed target and bridge enabled. Off: hides these details, not detections.','開啟：運動估計完成初始化後，顯示青色短期 Kalman 預測（最長 200 ms）、速度與不確定性。紅色缺測虛線框另外需要先點選穩定目標並啟用缺測預測。關閉只隱藏細節，不會隱藏偵測框。','オン：初期化後、水色の最大200msの予測・速度・不確かさを表示。赤い欠測枠には選択済み確定対象と欠測予測の有効化も必要です。オフでも検出は残ります。','켜짐: 초기화 후 최대 200ms의 청록 예측·속도·불확실성을 표시합니다. 빨간 누락 상자는 선택된 확정 대상과 누락 예측 활성화도 필요합니다. 꺼져도 검출은 남습니다.'],
+  topology:['On: draws purple links between confirmed neighboring tracks used as identity references. Off: hides the links, not the algorithm’s neighbor evidence. Needs multiple confirmed objects within the search radius.','開啟：用紫線顯示穩定追蹤物件之間的鄰居參考關係；關閉：隱藏連線，不會關閉演算法的鄰居證據。需搜尋半徑內有多個已確認物件。','オン：確定した近傍対象間の参照関係を紫線で表示。オフ：線だけを隠します。探索半径内に複数の確定対象が必要です。','켜짐: 확정된 이웃 추적 간 기준 관계를 보라 선으로 표시합니다. 꺼짐: 선만 숨기며 알고리즘 근거는 유지합니다. 검색 반경에 여러 확정 대상이 필요합니다.'],
+  diagnostics:['On: shows raw/stable IDs, frame timing and recovery scores/reasons. Off: reduces text clutter. Diagnostic scores are not detection-accuracy probabilities; this is display only.','開啟：顯示原始／穩定 ID、影格時間、恢復分數與原因；關閉：減少文字遮擋。診斷分數不是偵測正確率，只影響顯示。','オン：元ID・安定ID、時間、復元スコアと理由を表示。オフ：文字を減らします。診断スコアは検出精度の確率ではありません。','켜짐: 원본·안정 ID, 시간, 복구 점수·이유를 표시합니다. 꺼짐: 글자를 줄입니다. 진단 점수는 검출 정확도 확률이 아니며 표시만 바꿉니다.'],
+} satisfies Record<string,Text>;
+export const trackingVisualizationHelp=(language:Language,key:keyof typeof visualizationHelp)=>visualizationHelp[key][index[language]];
 const parameterNames: Record<string, Text> = {
   AI_TRACK_MINIMUM_MATCHING_THRESHOLD: ["Matching tolerance","配對容忍度","対応の許容度","매칭 허용도"],
   TRACK_MOTION_KALMAN_ENABLE: ["Kalman motion estimation","Kalman 運動估計","Kalman 動き推定","Kalman 움직임 추정"],
@@ -106,7 +157,10 @@ const parameterNames: Record<string, Text> = {
 export function trackingParameterName(language:Language,key:string) {return parameterNames[key]?.[index[language]]??key;}
 export type TrackingTextKey = keyof typeof words;
 export function trackingText(language:Language,key:TrackingTextKey) {return words[key][index[language]];}
-export function trackingHelp(language:Language,key:string) {return help[key as keyof typeof help]?.[index[language]];}
+export function trackingHelp(language:Language,key:string) {
+  const tradeoff=help[key as keyof typeof help]?.[index[language]];
+  return tradeoff?`${meanings[key as keyof typeof help][index[language]]}\n\n${tradeoff}`:undefined;
+}
 export function trackingState(language:Language,state?:string) {
   const keys:Record<string,TrackingTextKey>={direct:'direct',pending:'pending',reassociated:'reassociated',lost:'lost',bridge:'bridge',selection_expired:'selectionExpired'};
   return trackingText(language,keys[state??'']??'pending');

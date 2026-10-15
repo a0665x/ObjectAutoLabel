@@ -1,10 +1,11 @@
 import {useUiText, uiText, UiLanguageProvider} from './uiText';
-import { WorkflowProvider, AssignmentFooter, useWorkflow } from "./workflow/WorkflowState";
+import { WorkflowProvider, AssignmentFooter, WorkflowInputs, useWorkflow } from "./workflow/WorkflowState";
 import { CompositionBoard } from "./workflow/CompositionBoard";
 import { VersionInspector } from './workflow/VersionInspector';
 import {BoxAreaRange} from './components/BoxAreaRange';
+import {SplitCoverage} from './components/SplitCoverage';
 import type {BoxAreaDistribution} from './api/client';
-import { recipeIssue } from './workflow/composition';
+import { recipeIssue, splitRecipe } from './workflow/composition';
 import {workflowText} from './workflow/text';
 import {WorkflowError} from './workflow/WorkflowError';
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -354,6 +355,7 @@ export function App() {
         />
         <WorkflowProvider key={activeProject?.id ?? "none"} projectId={activeProject?.id ?? ""} revision={`${artifactRevision}:${jobs.map(job => `${job.id}:${job.status}`).join("|")}`} onNavigate={next=>navigateToPage(next as Page)} language={language}>
         <VersionInspector page={page}/>
+        {page==='review'&&activeProject&&<WorkflowInputs stages={['pseudo','augmentation']}/>}
         {page === "projects" && <ProjectsPage t={t} refresh={refresh} projects={projects} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} jobs={jobs} />}
         {page === "sources" && activeProject && <SourcesPage t={t} project={activeProject} refresh={refresh} refreshArtifacts={() => refreshProjectArtifacts(activeProject.id)} />}
         {page === "schema" && activeProject && <SchemaPage t={t} project={activeProject} />}
@@ -998,7 +1000,7 @@ export function SourcesPage({ project, refresh, refreshArtifacts, t }: { project
         <h2>{ui("Dataset analysis")}</h2>
         {analysis ? <SourceAnalysisPanel analysis={analysis} /> : <p className="muted">{ui("Press Process & analysis to register the source and show image count, dimensions, extensions, and size distribution.")}</p>}
       </div>
-      <div className="list-panel wide">
+      <div className="list-panel wide workflow-history">
         <div className="sidebar-header"><h2>{ui("Source history")}</h2>{runtime&&<span className="assigned-badge">{ui('Assigned: {name}',{name:sourceVersions.find(version=>version.id===assignedSourceId)?.name??ui('None')})}</span>}</div>
         {runtime&&<p className="muted">{ui('Assign one Source for Pseudo labeling. New sources remain unassigned until you choose them.')}</p>}
         {runtime?.error&&<WorkflowError message={runtime.error}/>}
@@ -1596,7 +1598,7 @@ export function PseudoPage({ project, models, jobs, refreshJobs, t }: { project:
   const selectedSchema = schemas.find((schema) => schema.id === schemaId);
   const serverPseudoJob = findWorkflowJob(jobs, "pseudo_label");
   const pseudoJob = isActiveJob(serverPseudoJob) ? serverPseudoJob : isActiveJob(localPseudoJob) ? localPseudoJob : serverPseudoJob ?? localPseudoJob;
-  const focusedRun=runtime?.focus?.stage==='pseudo'?runs.find(run=>run.id===runtime.focus?.id):undefined;
+  const focusedRun=runs.find(run=>run.id===(runtime?.focus?.stage==='pseudo'?runtime.focus.id:runtime?.state?.assignments.pseudo));
   const previewPath = focusedRun ? String(focusedRun.last_image_path??'') : pseudoJob ? parsePreviewPath(pseudoJob.message) : selectedSchema ? String(runs[0]?.last_image_path ?? "") : "";
   const graphSchema: ClassSchema = {
     id: schemaId || "draft-schema",
@@ -1740,7 +1742,7 @@ export function PseudoPage({ project, models, jobs, refreshJobs, t }: { project:
     >
       <h2 className="section-title-with-help">{t("startPseudo")} <HelpTooltip text={ui("Use this page to choose a committed person/car schema, edit prompt descriptors, then run YOLO-World. Descriptors are prompt helpers only; training labels stay canonical ids.")} /></h2>
       <p className="muted">{ui("Class schema is the training label YAML shape. Descriptors are editable YOLO-World prompts only; they collapse back to the parent class id for training.")}</p>
-      <section className="schema-commit-panel" aria-label={ui('Pseudo input source')}>
+      <section className="schema-commit-panel workflow-inputs" aria-label={ui('Pseudo input source')}>
         <label><span>{ui('Source version')}</span><select value={sourceId} disabled={!runtime?.state||runtime.busy||submitting||isActiveJob(pseudoJob)} onChange={event=>{if(runtime)void runtime.change(()=>api.assignWorkflow(project.id,'source',event.target.value||null));}}>
           <option value="">{ui('Select an assigned Source')}</option>
           {sourceVersions.map(version=><option key={version.id} value={version.id} disabled={Boolean(version.reason)}>{version.name} · {ui('{count} images',{count:version.count.toLocaleString()})} · {version.id.slice(0,8)}</option>)}
@@ -1999,7 +2001,7 @@ function AugmentationPage({ project, jobs, refreshJobs, artifactRevision }: { pr
       setName((current) => /^Augment_\d+_v\d+$/i.test(current) ? versionedBuildName("Augment", nextAugmentationRuns.map((run) => run.name || "")) : current);
       if (runtime) setSelectedPseudoRunId(runtime.state?.assignments.pseudo ?? "");
       else if (!selectedPseudoRunId && nextPseudoRuns[0]?.id) setSelectedPseudoRunId(nextPseudoRuns[0].id);
-      const inspectedId=runtime?.focus?.stage==='augmentation'?runtime.focus.id:'';
+      const inspectedId=runtime?.focus?.stage==='augmentation'?runtime.focus.id:runtime?.state?.assignments.augmentation??'';
       const nextId = nextSelectedId || (nextAugmentationRuns.some(run=>run.id===inspectedId)?inspectedId:chooseLatestBuildSelection(selectedBuildId, nextAugmentationRuns, false));
       setSelectedBuildId(nextId);
       return { runs: nextAugmentationRuns, selectedId: nextId };
@@ -2065,6 +2067,10 @@ function AugmentationPage({ project, jobs, refreshJobs, artifactRevision }: { pr
       setSelectedBuildId(runtime.focus.id);setCreatedSamples([]);
     }
   },[runtime?.focus?.serial,augmentationRuns]);
+  useEffect(()=>{
+    const id=runtime?.state?.assignments.augmentation;
+    if(id&&augmentationRuns.some(run=>run.id===id)){setSelectedBuildId(id);setCreatedSamples([]);}
+  },[runtime?.state?.assignments.augmentation,augmentationRuns]);
 
   function applyEditingEffect() {
     if (!editingEffect) return;
@@ -2112,14 +2118,14 @@ function AugmentationPage({ project, jobs, refreshJobs, artifactRevision }: { pr
     >
       <h2>{ui("Image augmentation")}</h2>
       <p className="muted">{ui("Optional step before Split. Build an augmentation stack with + parameters, configure each in a sampled-photo dialog, then create generated images.")}</p>
-      <label><span>{ui("Pseudo-label build input")}</span><select value={selectedPseudoRunId} onChange={(event) => { setSelectedPseudoRunId(event.target.value); if (runtime) void runtime.change(() => api.assignWorkflow(project.id, "pseudo", event.target.value || null)); }}><option value="">{ui("All currently labeled images")}</option>{pseudoRuns.map((run) => <option key={run.id} value={run.id}>{pseudoRunLabel(run)}</option>)}</select></label>
+      <section className="workflow-inputs"><label><span>{ui("Pseudo-label build input")}</span><select value={selectedPseudoRunId} disabled={runtime?.busy||submitting||isActiveJob(augmentationJob)} onChange={(event) => { if(runtime)void runtime.change(() => api.assignWorkflow(project.id, "pseudo", event.target.value || null));else setSelectedPseudoRunId(event.target.value); }}><option value="">{ui("All currently labeled images")}</option>{pseudoRuns.map((run) => <option key={run.id} value={run.id}>{pseudoRunLabel(run)}</option>)}</select></label></section>
       <label><span>{ui("Augmentation run name")}</span><input name="name" value={name} onChange={(event) => setName(event.target.value)} /></label>
       <AugmentationControlPanel settings={settings} onChange={setSettings} onEditEffect={(effect) => { setPreviewError(""); setModalPreviewSamples([]); setEditingEffect(effect); }} />
       {!hasEffects && !settings.skip && <p className="inline-feedback">{ui("Add at least one augmentation parameter or choose Skip augment to create a source build.")}</p>}
       <AugmentationBuildSummary run={selectedBuild} pseudoRuns={pseudoRuns} />
       {loadingBuilds ? <p className="inline-feedback"><LoaderCircle className="spin" size={15} /> {ui("Refreshing build versions…")}</p> : null}
       {augmentationRuns.length ? <div className="field-row"><label><span>{ui("Inspect build")}</span><select value={selectedBuildId} disabled={loadingBuilds} onChange={(event) => { setSelectedBuildId(event.target.value); setCreatedSamples([]); if(event.target.value)runtime?.viewVersion('augmentation',event.target.value); }}><option value="" disabled={runtime?.focus?.stage==='augmentation'}>{ui("Select augment/source build")}</option>{augmentationRuns.map((run) => <option key={run.id} value={run.id}>{augmentationRunLabel(run, pseudoRuns)}</option>)}</select></label><label className="check-row"><input type="checkbox" checked={showCreatedBoxes} onChange={(event) => setShowCreatedBoxes(event.target.checked)} />{ui("Show bounding boxes")}</label><button type="button" className="secondary action-browse" disabled={loadingBuilds} onClick={() => loadCreatedPreview().catch(console.error)}><Dice5 size={16} />{ui("Random sample")}</button></div> : null}
-      {augmentationRuns.length ? <details className="history-panel" open><summary>{ui("Augment history")}</summary><div className="version-list">{augmentationRuns.map((run) => <article className="history-row" data-stage="augmentation" data-inspected={runtime?.focus?.stage==='augmentation'&&runtime.focus.id===run.id} key={run.id}><div><strong>{augmentationRunLabel(run, pseudoRuns)}</strong><span>{Number(run.created_image_count ?? 0).toLocaleString()} {ui("generated images")}</span></div><HistoryDeleteButton projectId={project.id} artifactType="augmentation" artifactId={run.id} label={augmentationBuildName(run)} onDeleted={async () => { setCreatedSamples([]); await loadAugmentationRuns(); await refreshJobs(); }} /></article>)}</div></details> : null}
+      {!runtime&&augmentationRuns.length ? <details className="history-panel workflow-history" open><summary>{ui("Augment history")}</summary><div className="version-list">{augmentationRuns.map((run) => <article className="history-row" data-stage="augmentation" key={run.id}><div><strong>{augmentationRunLabel(run, pseudoRuns)}</strong><span>{Number(run.created_image_count ?? 0).toLocaleString()} {ui("generated images")}</span></div><HistoryDeleteButton projectId={project.id} artifactType="augmentation" artifactId={run.id} label={augmentationBuildName(run)} onDeleted={async () => { setCreatedSamples([]); await loadAugmentationRuns(); await refreshJobs(); }} /></article>)}</div></details> : null}
       {createdSamples.length ? <section className="augmentation-preview created-augmentation-preview"><h3>{ui("Random generated output check")}</h3><p className="muted">{ui("After Create augmented images, inspect random generated images to make sure transformed labels still align.")}</p><div className="split-sample-grid">{createdSamples.map((sample) => <AugmentationPreviewCard key={`created-${sample.image_id}`} sample={sample} showBoxes={showCreatedBoxes} />)}</div></section> : null}
       {augmentationJob && <div className="job-progress-inline" title={augmentationJob.message}><span>{augmentationJob.name}: {augmentationJob.status}</span><progress value={augmentationJob.progress} max={100} /><small>{augmentationJob.progress}% · {augmentationJob.message}</small></div>}
       <ProcessingButton busy={submitting || isActiveJob(augmentationJob)} jobId={isActiveJob(augmentationJob) ? augmentationJob?.id : undefined} disabled={!hasEffects && !settings.skip} progress={augmentationJob ? augmentationJob.progress : submitting ? 12 : undefined} statusText={augmentationJob ? augmentationJob.message || `${augmentationJob.name}: ${augmentationJob.status}` : ui("Submitting augmentation run…")} className="primary action-process"><Play size={17} />{ui("Create augmented images")}</ProcessingButton>
@@ -2164,7 +2170,12 @@ export function SplitPage({ project, jobs, refreshJobs, t, artifactRevision }: {
   const [selectedRunId, setSelectedRunId] = useState("");
   const [selectedAugmentationRunId, setSelectedAugmentationRunId] = useState("");
   const [splits, setSplits] = useState<Array<Record<string, unknown>>>([]);
-  const [selectedSplitId, setSelectedSplitId] = useState("");
+  const [legacySplitId, setSelectedSplitId] = useState("");
+  const view=runtime?.splitView??(legacySplitId?{mode:'history' as const,id:legacySplitId}:{mode:'new' as const});
+  const selectedSplitId=view.mode==='history'?view.id:'';
+  const inspecting=view.mode==='history';
+  const inputRequest=useRef(0);
+  const pendingBuild=useRef<{name:string;compositionId:string|null;previous:Set<string>}|null>(null);
   const [samples, setSamples] = useState<SplitSamples>({ train: [], valid: [], test: [] });
   const [sampleLimit, setSampleLimit] = useState(3);
   const [sampleSeed, setSampleSeed] = useState(() => Math.floor(Math.random() * 1_000_000));
@@ -2180,46 +2191,41 @@ export function SplitPage({ project, jobs, refreshJobs, t, artifactRevision }: {
   const computedTestRatio = Math.max(0, 1 - (Number.isFinite(trainRatioNumber) ? trainRatioNumber : 0) - (Number.isFinite(valRatioNumber) ? valRatioNumber : 0));
   const ratioTotal = (Number.isFinite(trainRatioNumber) ? trainRatioNumber : 0) + (Number.isFinite(valRatioNumber) ? valRatioNumber : 0) + computedTestRatio;
   const ratiosValid = Number.isFinite(trainRatioNumber) && Number.isFinite(valRatioNumber) && trainRatioNumber > 0 && valRatioNumber >= 0 && computedTestRatio >= 0 && Math.abs(ratioTotal - 1) < 0.0001;
+  function receiveSplits(items:Array<Record<string,unknown>>) {
+    setSplits(items);
+    const pending=pendingBuild.current;
+    const built=pending&&items.find(item=>!pending.previous.has(String(item.id))&&item.name===pending.name&&(!pending.compositionId||item.composition_id===pending.compositionId));
+    if(built){pendingBuild.current=null;if(runtime)runtime.selectSplit(String(built.id));else setSelectedSplitId(String(built.id));}
+  }
 
   async function loadSplits(nextSelectedId?: string) {
     const nextSplits = await api.datasetSplits(project.id);
-    setSplits(nextSplits);
-    const currentSplit = nextSplits.find((split) => split.is_current !== false) ?? nextSplits[0];
-    const nextId = nextSelectedId || String(currentSplit?.id ?? "");
-    setSelectedSplitId(nextId);
-    if (nextId) {
-      setSamples(await api.datasetSplitSamples(project.id, nextId, sampleLimit, sampleSeed));
-    } else {
-      setSamples({ train: [], valid: [], test: [] });
-    }
+    receiveSplits(nextSplits);
+    if(nextSelectedId){if(runtime)runtime.selectSplit(nextSelectedId);else setSelectedSplitId(nextSelectedId);}
   }
 
   async function loadBuildInputs(preferLatestAugment: boolean) {
+    const ticket=++inputRequest.current;
     setLoadingBuilds(true);
     try {
       const [nextRuns, nextAugmentationRuns, nextSplits, nextOpenDataImports] = await Promise.all([api.pseudoLabelRuns(project.id), api.augmentationRuns(project.id), api.datasetSplits(project.id), api.openDataImports(project.id)]);
+      if(ticket!==inputRequest.current)return;
       setRuns(nextRuns as PseudoLabelRun[]);
       setAugmentationRuns(nextAugmentationRuns as AugmentationRun[]);
-      setSplits(nextSplits);
+      receiveSplits(nextSplits);
       setOpenDataImports(nextOpenDataImports);
       setSelectedOpenDataImportId((current) => runtime ? runtime.state?.assignments.open_data ?? "" : current && nextOpenDataImports.some((item) => item.id === current) ? current : nextOpenDataImports.find((item) => item.status === "active")?.id ?? "");
       setSelectedRunId((current) => runtime ? runtime.state?.assignments.pseudo ?? "" : chooseLatestBuildSelection(current, nextRuns, false));
       const currentAugmentationRuns = nextAugmentationRuns.filter((run) => !run.outdated);
       setSelectedAugmentationRunId((current) => runtime ? runtime.state?.assignments.augmentation ?? "" : chooseLatestBuildSelection(current, currentAugmentationRuns, preferLatestAugment));
-      const nextSplitId = String((nextSplits.find((split) => split.is_current !== false) ?? nextSplits[0])?.id ?? "");
-      setSelectedSplitId(nextSplitId);
-      if (nextSplitId) {
-        setLoadingSamples(true);
-        setSamples(await api.datasetSplitSamples(project.id, nextSplitId, sampleLimit, sampleSeed));
-      }
     } finally {
-      setLoadingSamples(false);
-      setLoadingBuilds(false);
+      if(ticket===inputRequest.current)setLoadingBuilds(false);
     }
   }
 
   useEffect(() => {
     loadBuildInputs(false).catch(console.error);
+    return()=>{inputRequest.current++;};
   }, [project.id]);
 
   useEffect(() => {
@@ -2228,9 +2234,11 @@ export function SplitPage({ project, jobs, refreshJobs, t, artifactRevision }: {
   }, [artifactRevision]);
 
   useEffect(() => {
-    if (!selectedSplitId) return;
+    let cancelled=false;setSamples({train:[],valid:[],test:[]});
+    if (!selectedSplitId){setLoadingSamples(false);return;}
     setLoadingSamples(true);
-    api.datasetSplitSamples(project.id, selectedSplitId, sampleLimit, sampleSeed).then(setSamples).catch(console.error).finally(() => setLoadingSamples(false));
+    api.datasetSplitSamples(project.id, selectedSplitId, sampleLimit, sampleSeed).then(next=>{if(!cancelled)setSamples(next);}).catch(error=>{if(!cancelled)setSubmitError(String(error));}).finally(() => {if(!cancelled)setLoadingSamples(false);});
+    return()=>{cancelled=true;};
   }, [project.id, selectedSplitId, sampleLimit, sampleSeed]);
 
   useEffect(() => {
@@ -2245,14 +2253,28 @@ export function SplitPage({ project, jobs, refreshJobs, t, artifactRevision }: {
   const selectedSplit = splits.find((split) => String(split.id) === selectedSplitId);
   const inputIssue=runtime?recipeIssue(runtime.state,runtime.draft):'';
   const canSubmitSplit = ratiosValid && !selectedAugmentationRun?.outdated && !inputIssue && !runtime?.busy;
+  const chooseHistory=(id:string)=>{if(id){if(runtime)runtime.selectSplit(id);else setSelectedSplitId(id);}else {runtime?.newSplit();if(!runtime)setSelectedSplitId('');}};
+  function startNew() {
+    if(selectedSplit){runtime?.setDraft(splitRecipe(selectedSplit));setTrainRatio(String(selectedSplit.train_ratio??'.8'));setValRatio(String(selectedSplit.val_ratio??'.1'));}
+    runtime?.newSplit();if(!runtime)setSelectedSplitId('');
+  }
   return (
     <section className="panel-grid split-workspace">
-      <CompositionBoard disabled={submitting} onConfigureSplit={()=>{
+      <section className="panel wide split-version-context workflow-history" aria-label={w('Split version context')}>
+        <fieldset className="split-mode"><legend>{w('Split mode')}</legend>
+          <label><input type="radio" name="split-mode" checked={!inspecting} disabled={submitting||isActiveJob(splitJob)} onChange={startNew}/>{w('New Split')}</label>
+          <label><input type="radio" name="split-mode" checked={inspecting} disabled={submitting||isActiveJob(splitJob)||!splits.length} onChange={()=>chooseHistory(runtime?.state?.assignments.split??String(splits[0]?.id??''))}/>{w('History')}</label>
+        </fieldset>
+        <label><span>{w('Preview Split version')}</span><select value={selectedSplitId} disabled={submitting||isActiveJob(splitJob)} onChange={event=>chooseHistory(event.target.value)}><option value="">{w('New Split · no saved result yet')}</option>{splits.map(split=><option key={String(split.id)} value={String(split.id)}>{splitDisplayName(split)} · {w('{count} images',{count:datasetSplitImageCount(split).toLocaleString()})}{split.outdated?` · ${w('Outdated — rebuild required')}`:''}</option>)}</select></label>
+        <p className="muted" role="status">{inspecting?w('Viewing {name} · inputs and results belong to this saved version.',{name:selectedSplit?splitDisplayName(selectedSplit):w('Version unavailable')}):w('New Split draft · build it to see its saved distribution.')}</p>
+      </section>
+      <CompositionBoard disabled={submitting||isActiveJob(splitJob)} recipe={inspecting?(selectedSplit?splitRecipe(selectedSplit):{pseudo_label_run_id:null,augmentation_run_id:null,open_data_import_id:null}):undefined}
+        splitName={inspecting?(selectedSplit?splitDisplayName(selectedSplit):w('Version unavailable')):undefined} splitCount={selectedSplit?datasetSplitImageCount(selectedSplit):undefined} onConfigureSplit={()=>{
         const form=document.getElementById('split-build-form');
         form?.scrollIntoView({behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'});
         form?.querySelector<HTMLInputElement>('input[name="train"]')?.focus({preventScroll:true});
       }}/>
-      <form
+      {!inspecting&&<form
         id="split-build-form"
         className="panel wide"
         onSubmit={async (event) => {
@@ -2267,10 +2289,11 @@ export function SplitPage({ project, jobs, refreshJobs, t, artifactRevision }: {
           try {
             if (!ratiosValid) throw new Error("Train + validation must be <= 1.0 so test can fill the remainder.");
             const composition=runtime?await runtime.saveDraft():null;
+            const name=versionedBuildName("Split", splits.map((split) => String(split.name ?? "")));
             await api.split(project.id, {
               // Keep prior materialized splits immutable for an already-running training job.
               ...(composition ? { composition_id: composition.id } : {}),
-              name: versionedBuildName("Split", splits.map((split) => String(split.name ?? ""))),
+              name,
               train_ratio: trainRatioNumber,
               val_ratio: valRatioNumber,
               test_ratio: Number(computedTestRatio.toFixed(4)),
@@ -2278,6 +2301,7 @@ export function SplitPage({ project, jobs, refreshJobs, t, artifactRevision }: {
               augmentation_run_id: composition ? composition.augmentation_run_id : selectedAugmentationRunId || null,
               open_data_import_id: composition ? composition.open_data_import_id : selectedOpenDataImportId || null
             });
+            pendingBuild.current={name,compositionId:composition?.id??null,previous:new Set(splits.map(split=>String(split.id)))};
             await refreshJobs();
             await loadSplits();
           } catch (error) {
@@ -2323,20 +2347,22 @@ export function SplitPage({ project, jobs, refreshJobs, t, artifactRevision }: {
           <p className={ratiosValid ? "inline-feedback" : "review-error"}>{ratiosValid ? w("Total = 1.00. Test automatically fills the remaining {ratio}.",{ratio:computedTestRatio.toFixed(2)}) : w("Invalid split: Train + Validation cannot exceed 1.00.")}</p>
         </div>
         <ProcessingButton busy={submitting || isActiveJob(splitJob)} jobId={isActiveJob(splitJob) ? splitJob?.id : undefined} disabled={!canSubmitSplit} progress={splitJob ? splitJob.progress : submitting ? 15 : undefined} statusText={w("Building Split version…")} className="primary action-process">{w("Build New Split Version")}</ProcessingButton>
-      </form>
-      <div className="list-panel wide">
-        <div className="sidebar-header"><div><h2>{w("Saved Splits")}</h2><p className="muted">{w("Random visual check only; rerolling does not change the saved Split.")}</p></div><button type="button" className="secondary icon-action" aria-label={w("Reroll Split samples")} title={w("Reroll Split samples")} onClick={() => setSampleSeed((current) => current + 1)}><Dice5 size={18} />{w("Random sample")}</button></div>
+      </form>}
+      {inspecting&&selectedSplit&&<div className="list-panel wide" data-split-result={selectedSplitId}>
+        <div className="sidebar-header"><div><h2>{w('Saved Split · {name}',{name:splitDisplayName(selectedSplit)})}</h2><p className="muted">{w("Random visual check only; rerolling does not change the saved Split.")}</p></div><button type="button" className="secondary icon-action" aria-label={w("Reroll Split samples")} title={w("Reroll Split samples")} onClick={() => setSampleSeed((current) => current + 1)}><Dice5 size={18} />{w("Random sample")}</button></div>
         <div className="field-row">
-          <label><span>{w("Preview Split version")}</span><select value={selectedSplitId} onChange={(event) => setSelectedSplitId(event.target.value)}><option value="">{w("No Split version selected")}</option>{splits.map((split) => <option key={String(split.id)} value={String(split.id)}>{splitDisplayName(split)} · {w("{count} images",{count:datasetSplitImageCount(split).toLocaleString()})}{split.outdated?` · ${w("Outdated — rebuild required")}`:""}</option>)}</select></label>
           <label title={w("How many images to sample from each train/valid/test bucket.")}><span>{w("Samples per bucket")}</span><input type="number" min="1" max="12" value={sampleLimit} onChange={(event) => setSampleLimit(Number(event.target.value))} /></label>
         </div>
         {runtime && selectedSplit && <button type="button" className="secondary" disabled={runtime.busy||Boolean(selectedSplit.outdated)} onClick={()=>void runtime.useSplitForTraining(String(selectedSplit.id))}>{w("Use this Split in Train")} <ArrowRight size={16}/></button>}
         <WorkflowError message={runtime?.error}/>
-        {selectedSplit && <><DatasetLineageChain split={selectedSplit} pseudoRun={runs.find((run) => run.id === selectedSplit.pseudo_label_run_id)} augmentationRun={augmentationRuns.find((run) => run.id === selectedSplit.augmentation_run_id)} openDataImport={openDataImports} /><p className="muted">{w("Train")}/{w("Validation")}/{w("Test")}={String(selectedSplit.train_ratio)}/{String(selectedSplit.val_ratio)}/{String(selectedSplit.test_ratio)} · {String(selectedSplit.dataset_yaml_path)}</p></>}
+        <p className="muted">{w("Train")}/{w("Validation")}/{w("Test")}={String(selectedSplit.train_ratio)}/{String(selectedSplit.val_ratio)}/{String(selectedSplit.test_ratio)}</p>
+        <OutdatedArtifactNotice outdated={Boolean(selectedSplit.outdated)} reason={typeof selectedSplit.outdated_reason==='string'?selectedSplit.outdated_reason:null} rebuild="Build a new Split version before training."/>
+        {selectedSplit && <SplitCoverage key={`${project.id}/${selectedSplitId}`} projectId={project.id} splitId={selectedSplitId} language={runtime?.language??'en'}/>}
         {loadingSamples ? <p className="inline-feedback"><LoaderCircle className="spin" size={15} /> {w("Rendering split sample boxes…")}</p> : null}
         <SplitSamplePreview samples={samples} />
-        <details><summary>{w("All Split versions & lineage")}</summary>{splits.map((split) => <article key={String(split.id)} className={`row-card history-row ${split.outdated ? "is-outdated" : ""}`}><div><strong>{w(split.is_current !== false ? "Current Split" : "Saved Split version")}</strong><DatasetLineageChain split={split} pseudoRun={runs.find((run) => run.id === split.pseudo_label_run_id)} augmentationRun={augmentationRuns.find((run) => run.id === split.augmentation_run_id)} openDataImport={openDataImports} /><span>{String(split.dataset_yaml_path)} · {w("Train")}/{w("Validation")}/{w("Test")}={String(split.train_ratio)}/{String(split.val_ratio)}/{String(split.test_ratio)}</span><OutdatedArtifactNotice outdated={Boolean(split.outdated)} reason={typeof split.outdated_reason === "string" ? split.outdated_reason : null} rebuild="Build a new Split version before training." /></div><HistoryDeleteButton projectId={project.id} artifactType="split" artifactId={String(split.id)} label={splitDisplayName(split)} onDeleted={async () => { setSamples({ train: [], valid: [], test: [] }); await loadBuildInputs(false); await refreshJobs(); }} /></article>)}</details>
-      </div>
+      </div>}
+      {inspecting&&!selectedSplit&&!loadingBuilds&&<p role="alert">{w('This Split is unavailable. Choose another history version or New.')}</p>}
+      <AssignmentFooter page="split" onDeleted={async()=>{await loadBuildInputs(false);await refreshJobs();}}/>
     </section>
   );
 }
@@ -2581,7 +2607,7 @@ export function TrainPage({ project, models, jobs, refreshJobs, t, artifactRevis
   }, [runtime?.state?.assignments.split, Boolean(runtime?.state)]);
   const selectedSplit = splits.find((split) => String(split.id) === splitId);
   const canSubmitTraining = Boolean(selectedSplit && !selectedSplit.outdated);
-  const selectedOrLatestRun = trainingRuns.find((run) => run.job_id === trainingJob?.id) ?? trainingRuns[0] ?? null;
+  const selectedOrLatestRun = trainingRuns.find(run=>run.id===runtime?.state?.assignments.training)??trainingRuns.find((run) => run.job_id === trainingJob?.id) ?? trainingRuns[0] ?? null;
   const persistedConfig = selectedOrLatestRun?.settings && Object.keys(selectedOrLatestRun.settings).length ? selectedOrLatestRun.settings : null;
   const visibleConfig = (submittedConfig ?? persistedConfig) as Record<string, string | number | boolean> | null;
   return (
@@ -2624,7 +2650,7 @@ export function TrainPage({ project, models, jobs, refreshJobs, t, artifactRevis
       <p className="muted">{ui("Choose the exact Split version to train. Versions marked outdated stay visible in Split history but cannot be trained.")}</p>
       <label title={ui("Training build name shown later in Validate and Model Convert selectors.")}><span>{ui("Training run name")}</span><input value={runName} onChange={(event) => setRunName(event.target.value)} /></label>
       {loadingInputs ? <p className="inline-feedback"><LoaderCircle className="spin" size={15} /> {ui("Syncing latest split/model inputs…")}</p> : null}
-      <label><span>{ui("Split version")}</span><select value={splitId} disabled={loadingInputs} onChange={(event) => { setSplitId(event.target.value); if (runtime) void runtime.change(() => api.assignWorkflow(project.id, "split", event.target.value || null)); }}><option value="">{ui("No usable Split version")}</option>{splits.filter((split) => !split.outdated).map((split) => <option key={split.id} value={split.id}>{datasetSplitOptionLabel(split, pseudoRuns, augmentationRuns, openDataImports)}{split.is_current !== false ? ui(" · Current") : ui(" · Saved")}</option>)}</select></label>
+      <section className="workflow-inputs"><label><span>{ui("Split version")}</span><select value={splitId} disabled={loadingInputs||runtime?.busy||submitting||isActiveJob(trainingJob)} onChange={(event) => {if(runtime)void runtime.change(() => api.assignWorkflow(project.id, "split", event.target.value || null));else setSplitId(event.target.value); }}><option value="">{ui("No usable Split version")}</option>{splits.filter((split) => !split.outdated).map((split) => <option key={split.id} value={split.id}>{datasetSplitOptionLabel(split, pseudoRuns, augmentationRuns, openDataImports)}{split.is_current !== false ? ui(" · Current") : ui(" · Saved")}</option>)}</select></label></section>
       {!canSubmitTraining ? <div className="outdated-training-block"><span>{ui("Project data changed or no usable Split version exists. Build a new Split version before training.")}</span>{onGoToSplit ? <button type="button" className="secondary" onClick={onGoToSplit}>{ui("Go to Split")}</button> : null}</div> : null}
       {submitError ? <p className="review-error" role="alert">{submitError}</p> : null}
       <TrainingInputSummary split={selectedSplit} pseudoRuns={pseudoRuns} augmentationRuns={augmentationRuns} openDataImport={openDataImports} />
@@ -2725,7 +2751,7 @@ function ValidationPage({ project, models, artifactRevision }: { project: Projec
   }
   const selectedSchema = schemas.find((schema) => schema.id === schemaId);
   const fallbackModels = [...models.output_models, ...models.input_models];
-  return <section className="panel-grid"><div className="panel wide">{showBrowser && <FileManagerDialog mode="image_folder" initialPath={folderPath} onClose={() => setShowBrowser(false)} onSelect={(path) => { setFolderPath(path); setResults([]); setShowBrowser(false); }} />}<div className="sidebar-header"><div><h2>{ui("Validate / random inference")}</h2><p className="muted">{ui("Choose a model, class schema, folder, and how many random images to inspect.")}</p></div><ValidationRandomButton loading={loading} sampleCount={sampleCount} onSampleCountChange={setSampleCount} onClick={runRandomInference} disabled={!folderPath.trim()} /></div>{loadingModels ? <p className="inline-feedback"><LoaderCircle className="spin" size={15} /> {ui("Syncing latest project models…")}</p> : null}<div className="field-row"><label title={ui("Model artifact used for inference. Current project training outputs are listed before global models.")}><span>{ui("Model source")}</span><select value={modelName} disabled={loadingModels} onChange={(event) => setModelName(event.target.value)}>{modelSources.map((source) => <option key={source.id} value={source.path}>{source.label}</option>)}{fallbackModels.length ? <optgroup label={ui("Global models")}>{fallbackModels.map((model) => <option key={model} value={model}>{model}</option>)}</optgroup> : null}</select></label><label title={ui("Class schema used to show id/name context next to model outputs.")}><span>{ui("Class schema")}</span><select value={schemaId} onChange={(event) => setSchemaId(event.target.value)}><option value="">{ui("Model native classes")}</option>{schemas.map((schema) => <option key={schema.id} value={schema.id}>{schema.name}</option>)}</select></label></div><FolderPathField value={folderPath} onChange={(path) => { setFolderPath(path); setResults([]); }} onBrowse={() => setShowBrowser(true)} />{selectedSchema && <SchemaHierarchy schema={selectedSchema} />}{error && <p className="review-error">{ui(error)}</p>}{results.length ? <div className="validation-results-grid">{results.map((result) => <InferencePreviewCard key={result.image_path ?? result.file_name} result={result} />)}</div> : null}</div></section>;
+return <section className="panel-grid"><div className="panel wide">{showBrowser && <FileManagerDialog mode="image_folder" initialPath={folderPath} onClose={() => setShowBrowser(false)} onSelect={(path) => { setFolderPath(path); setResults([]); setShowBrowser(false); }} />}<div className="sidebar-header"><div><h2>{ui("Validate / random inference")}</h2><p className="muted">{ui("Choose a model, class schema, folder, and how many random images to inspect.")}</p></div><ValidationRandomButton loading={loading} sampleCount={sampleCount} onSampleCountChange={setSampleCount} onClick={runRandomInference} disabled={!folderPath.trim()} /></div>{loadingModels ? <p className="inline-feedback"><LoaderCircle className="spin" size={15} /> {ui("Syncing latest project models…")}</p> : null}<div className="field-row workflow-inputs"><label title={ui("Model artifact used for inference. Current project training outputs are listed before global models.")}><span>{ui("Model source")}</span><select value={modelName} disabled={loadingModels||runtime?.busy} onChange={(event) => {const path=event.target.value;setModelName(path);setResults([]);const source=modelSources.find(item=>item.path===path);if(runtime)void runtime.change(()=>api.assignWorkflow(project.id,'training',source?.scope==='current_project'?source.training_run_id??null:null));}}>{modelSources.map((source) => <option key={source.id} value={source.path}>{source.label}</option>)}{fallbackModels.length ? <optgroup label={ui("Global models")}>{fallbackModels.map((model) => <option key={model} value={model}>{model}</option>)}</optgroup> : null}</select></label><label title={ui("Class schema used to show id/name context next to model outputs.")}><span>{ui("Class schema")}</span><select value={schemaId} onChange={(event) => setSchemaId(event.target.value)}><option value="">{ui("Model native classes")}</option>{schemas.map((schema) => <option key={schema.id} value={schema.id}>{schema.name}</option>)}</select></label></div><FolderPathField value={folderPath} onChange={(path) => { setFolderPath(path); setResults([]); }} onBrowse={() => setShowBrowser(true)} />{selectedSchema && <SchemaHierarchy schema={selectedSchema} />}{error && <p className="review-error">{ui(error)}</p>}{results.length ? <div className="validation-results-grid">{results.map((result) => <InferencePreviewCard key={result.image_path ?? result.file_name} result={result} />)}</div> : null}</div></section>;
 }
 
 export function InferencePreviewCard({ result }: { result: ValidationPreviewResult }) {
@@ -2980,7 +3006,7 @@ export function ModelConvertPage({ project, jobs, refreshJobs }: { project: Proj
       }}>
         <h2>{ui("Model Convert / Export")}</h2>
         <p className="muted">{ui("Convert a completed model, inspect artifacts, and download one ZIP with class metadata, training configuration, metrics, and result plots when available.")}</p>
-        <ModelSourceSelector sources={modelSources} value={modelSourceId} onChange={setModelSourceId} />
+        <section className="workflow-inputs"><ModelSourceSelector sources={modelSources} value={modelSourceId} onChange={id=>{setModelSourceId(id);const source=modelSources.find(item=>item.id===id);if(runtime)void runtime.change(()=>api.assignWorkflow(project.id,'training',source?.scope==='current_project'?source.training_run_id??null:null));}} /></section>
         {selectedModelSource && <p className="stream-lineage">{selectedModelSource.label}</p>}
         <label><span>{ui("Class schema")}</span><select value={schemaId} onChange={(event) => setSchemaId(event.target.value)}>
           {schemas.map((schema) => <option key={schema.id} value={schema.id}>{schema.name}</option>)}

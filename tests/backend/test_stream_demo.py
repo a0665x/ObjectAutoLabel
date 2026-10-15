@@ -157,10 +157,43 @@ def test_external_model_is_project_scoped_and_rejects_changed_files(setup, monke
     assert 'changed' in changed.json()['detail']
 
 
+def test_local_model_switch_resolves_each_inspected_path_not_conversion(setup, monkeypatch, tmp_path):
+    from backend.app import stream_models
+    _, project, client = setup
+    monkeypatch.setattr(stream_models, 'inspect_external_model', lambda *_: {'format':'onnx','layout':'NCHW','available':True})
+    monkeypatch.setattr(stream, 'list_models', lambda *_: [{'id':'conversion', 'path':'/previous/model.pt', 'format':'pt'}])
+    monkeypatch.setattr(stream, 'capabilities', lambda: {'available':True, 'cuda':False, 'engines':{'onnx':{'available':True}}})
+    monkeypatch.setattr(stream, 'resolve_upload', lambda *_: Path('/video.mp4'))
+    monkeypatch.setattr(stream, 'probe_video', lambda *_: {'duration':20})
+    loaded=[]
+    class Session:
+        def __init__(self, config, model_path, *args):
+            loaded.append(str(model_path))
+        async def run(self, ws):
+            await ws.send_json({'type':'started','model':self.model_identity})
+        async def close(self):
+            pass
+    monkeypatch.setattr(stream,'StreamSession',Session)
+    url=f"/api/projects/{project['id']}/stream-demo"
+    for name in ['first.onnx','second.onnx']:
+        path=tmp_path/name
+        path.write_bytes(name.encode())
+        inspected=client.post(url+'/inspect-model',json={'path':str(path),'coordinates':'pixels'})
+        assert inspected.status_code==200
+        model_id=inspected.json()['id']
+        with client.websocket_connect(url+'/live',headers={'origin':'http://testserver'}) as socket:
+            socket.send_json({'model_id':model_id,'source':'upload','source_id':'video','device':'cpu'})
+            assert socket.receive_json()=={'type':'started','model':{'model_id':model_id,'path':str(path),'format':'onnx'}}
+    assert loaded==[str(tmp_path/'first.onnx'),str(tmp_path/'second.onnx')]
+
+
 def test_tracking_yaml_import_preserves_names_validates_values_and_ignores_unrelated_env(setup):
     _,_,client=setup
     schema=client.get('/api/stream-demo/tracking-settings').json()
     assert schema['defaults']['TRACKING_ID_STABILIZER_MATCH_THRESHOLD']==.65
+    assert schema['defaults']['TRACK_MOTION_MAX_PREDICTION_MS']==800
+    assert schema['defaults']['TRACKING_BRIDGE_TTL_MS']==800
+    assert schema['defaults']['TRACKING_BRIDGE_MAX_MISSES']==12
     url='/api/stream-demo/tracking-settings/import'
     response=client.post(url,content='env:\n  TRACKING_ID_STABILIZER_CONFIRM_FRAMES: 7\n  AI_MODEL_PATH: ignored.tflite\n')
     assert response.status_code==200

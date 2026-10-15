@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor, cleanup, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, cleanup, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import { api } from "../api/client";
-import { AssignmentFooter, WorkflowProvider, type WorkflowState } from "./WorkflowState";
+import { api, type SplitSamples } from "../api/client";
+import { AssignmentFooter, WorkflowProvider, WorkflowInputs, useWorkflow, type WorkflowState } from "./WorkflowState";
 import { CompositionBoard } from "./CompositionBoard";
 import { VersionInspector } from "./VersionInspector";
 import { SplitPage } from "../App";
@@ -153,13 +153,15 @@ function mockSave(state: WorkflowState) {
     ...state, composition_id: "c1", compositions: [{...recipe, id: "c1", reason: "", created_at: "2026-10-01"}]
   }));
 }
-function renderSplit(state: WorkflowState, language:Language='en', savedSplits:Array<DatasetSplitRun & {composition_id?:string}> = []) {
-  vi.spyOn(api, "workflowState").mockResolvedValue(state);
+function renderSplit(state: WorkflowState, language:Language='en', savedSplits:Array<DatasetSplitRun & {composition_id?:string;composition?:Record<string,unknown>}> = []) {
+  const catalogState={...state,catalog:{...state.catalog,split:state.catalog.split.length?state.catalog.split:savedSplits.map(split=>({id:split.id,name:split.name??split.id,count:1,settings:{train_ratio:split.train_ratio,val_ratio:split.val_ratio,test_ratio:split.test_ratio},reason:'',created_at:''}))}};
+  vi.spyOn(api, "workflowState").mockResolvedValue(catalogState);
   vi.spyOn(api, "pseudoLabelRuns").mockResolvedValue([]);
   vi.spyOn(api, "augmentationRuns").mockResolvedValue([]);
   vi.spyOn(api, "openDataImports").mockResolvedValue([]);
   vi.spyOn(api, "datasetSplits").mockResolvedValue(savedSplits);
   vi.spyOn(api, "datasetSplitSamples").mockResolvedValue({train:[],valid:[],test:[]});
+  vi.spyOn(api,'datasetSplitCoverage').mockImplementation(async(_pid,sid)=>({split_id:sid,split_name:savedSplits.find(split=>split.id===sid)?.name??sid,provenance:'frozen',seed:42,ordering:'source_then_filename',total:0,all_counts:{train:0,valid:0,test:0},counts:{train:0,valid:0,test:0},group_id:null,groups:[],window:{start:0,end:1,first_index:0,last_index:0,count:0},window_counts:{train:0,valid:0,test:0},bins:[]}));
   const split = vi.spyOn(api, "split").mockResolvedValue({id:"job",name:"dataset_split",status:"queued",progress:0,message:"queued"});
   render(<WorkflowProvider projectId="p" revision="1" language={language}><SplitPage project={{id:"p",name:"Demo",description:"",root_path:"/tmp/demo"}} jobs={[]} refreshJobs={async()=>{}} t={key=>key} artifactRevision={0}/></WorkflowProvider>);
   return split;
@@ -177,7 +179,7 @@ it("uses a saved combination locally and reuses its id when building",async()=>{
   const state=fixture();
   state.compositions=[{id:"saved",name:"Reusable",pseudo_label_run_id:"p2",augmentation_run_id:"a1",open_data_import_id:null,reason:"",created_at:"2026-10-01"}];
   const save=mockSave(state), assign=vi.spyOn(api,"assignComposition"), split=renderSplit(state);
-  await screen.findByText('Reusable');
+  await screen.findByRole('option',{name:'Reusable'});
   fireEvent.click(screen.getByText('Saved combinations'));
   fireEvent.click(screen.getByRole("button",{name:"Use combination"}));
   expect(assign).not.toHaveBeenCalled();
@@ -256,7 +258,7 @@ it.each([
   expect(screen.getByRole('button',{name:build})).toBeTruthy();
   fireEvent.click(screen.getByText(help));
   expect(screen.getByText(w('Validation portion: images used during training to monitor overfitting and select best.pt.'))).toBeTruthy();
-  expect(screen.getByRole('heading',{name:w('Training samples')})).toBeTruthy();
+  expect(screen.queryByRole('heading',{name:w('Training samples')})).toBeNull();
   fireEvent.change(screen.getByLabelText(w('Train ratio')),{target:{value:'1.2'}});
   expect(screen.getByText(w('Invalid split: Train + Validation cannot exceed 1.00.'))).toBeTruthy();
   expect((screen.getByRole('button',{name:build}) as HTMLButtonElement).disabled).toBe(true);
@@ -298,8 +300,8 @@ it('localizes saved Split history and its deletion confirmation without changing
   const remove=vi.spyOn(api,'deleteHistory');
   renderSplit(fixture(),'zh',[{id:'s1',name:'Split_original_name',is_current:true,composition_id:'c1',pseudo_label_run_id:null,augmentation_run_id:null,open_data_import_id:'o1',image_ids_json:'{"train":["i1"]}',train_ratio:.8,val_ratio:.1,test_ratio:.1,dataset_yaml_path:'/data/original_path/data.yaml'}]);
   await screen.findByRole('option',{name:'Split_original_name · 1 張圖片'});
+  fireEvent.change(screen.getByLabelText('預覽切分版本'),{target:{value:'s1'}});
   expect(screen.getByRole('button',{name:'使用此切分進行訓練'})).toBeTruthy();
-  fireEvent.click(screen.getByText('所有切分版本與來源'));
   fireEvent.click(screen.getByRole('button',{name:'刪除切分紀錄 Split_original_name'}));
   expect(confirm).toHaveBeenCalledWith('刪除切分「Split_original_name」及依賴它的訓練／匯出紀錄？原始來源將保留。');
   expect(remove).not.toHaveBeenCalled();
@@ -328,4 +330,82 @@ it("allows removing a source that disappeared while the draft was open",async()=
   fireEvent.click(screen.getByRole("button",{name:"Remove Pseudo"}));
   expect(screen.queryByText("Version unavailable")).toBeNull();
   expect(screen.queryByRole("button",{name:"Remove Pseudo"})).toBeNull();
+});
+
+it('never presents a different saved Split as the result of a newly selected combination',async()=>{
+  const state=fixture();
+  state.compositions=[{id:'c2',name:'Combination 2',pseudo_label_run_id:'p2',augmentation_run_id:'a1',open_data_import_id:null,reason:'',created_at:''}];
+  renderSplit(state,'en',[{id:'s3',name:'Split_three',composition_id:'c3',composition:{pseudo_label_run_id:'p1',augmentation_run_id:null,open_data_import_id:null},is_current:true,pseudo_label_run_id:'p1',augmentation_run_id:null,open_data_import_id:null,image_ids_json:'{"train":["i3"]}',train_ratio:.7,val_ratio:.2,test_ratio:.1,dataset_yaml_path:'/tmp/three/data.yaml'}]);
+  await screen.findByRole('option',{name:'Split_three · 1 images'});
+  fireEvent.click(screen.getByText('Saved combinations'));
+  fireEvent.click(screen.getByRole('button',{name:'Use combination'}));
+  expect(screen.getByRole('button',{name:'Choose Augment version'}).textContent).toContain('Augmented');
+  expect(screen.queryByRole('heading',{name:'Saved Splits'})).toBeNull();
+  expect(document.querySelector('.split-coverage')).toBeNull();
+});
+
+it('binds historical inputs, ratios, previews and coverage to one selected Split',async()=>{
+  const state=fixture();state.assignments.split='s1';
+  const one={id:'s1',name:'Split_one',composition_json:JSON.stringify({pseudo_label_run_id:'p2',augmentation_run_id:'a1',open_data_import_id:null,branches:[{pseudo_label_run_id:'p2',augmentation_run_id:'a1'},{pseudo_label_run_id:'p1',augmentation_run_id:null}]}),is_current:false,pseudo_label_run_id:'p2',augmentation_run_id:'a1',open_data_import_id:null,image_ids_json:'{"train":["i1"]}',train_ratio:.7,val_ratio:.2,test_ratio:.1,dataset_yaml_path:'/tmp/one/data.yaml'};
+  const two={...one,id:'s2',name:'Split_two',composition_json:null,pseudo_label_run_id:'p1',augmentation_run_id:null,is_current:true};
+  const assign=vi.spyOn(api,'assignWorkflow');renderSplit(state,'en',[two,one]);
+  await screen.findByText('Recorded inputs of this Split. Choose New to edit.');
+  expect((screen.getByLabelText('Preview Split version') as HTMLSelectElement).value).toBe('s1');
+  expect(document.querySelectorAll('.composition-source-group')).toHaveLength(2);
+  expect(document.querySelector('[data-split-result]')?.getAttribute('data-split-result')).toBe('s1');
+  expect(document.querySelector('#split-build-form')).toBeNull();
+  fireEvent.change(screen.getByLabelText('Preview Split version'),{target:{value:'s2'}});
+  await waitFor(()=>expect(api.datasetSplitSamples).toHaveBeenLastCalledWith('p','s2',3,expect.any(Number)));
+  expect(document.querySelectorAll('.composition-source-group')).toHaveLength(1);
+  expect(screen.getByRole('button',{name:'Choose Pseudo version'}).textContent).toContain('First');
+  expect(assign).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('radio',{name:'New Split'}));
+  expect(screen.getByLabelText('Train ratio').getAttribute('value')).toBe('0.7');
+  expect(document.querySelector('[data-split-result]')).toBeNull();
+  expect(document.querySelector('.split-coverage')).toBeNull();
+  expect((screen.getByRole('button',{name:'Choose Pseudo version'}) as HTMLButtonElement).disabled).toBe(false);
+});
+
+it('keeps history Assign/Delete visible and updates the common selection without navigating away',async()=>{
+  const state=fixture();const run={id:'s2',name:'Saved_two',pseudo_label_run_id:'p2',augmentation_run_id:'a1',open_data_import_id:null,is_current:true,image_ids_json:'{"train":["i2"]}',train_ratio:.8,val_ratio:.1,test_ratio:.1};
+  state.catalog.split=[{id:'s2',name:'Saved_two',count:1,settings:{},reason:'',created_at:''}];
+  const assign=vi.spyOn(api,'assignWorkflow').mockResolvedValue({...state,assignments:{pseudo:'p2',augmentation:'a1',split:'s2'}});
+  const remove=vi.spyOn(api,'deleteHistory').mockResolvedValue({deleted:{split:1},removed_paths:[]});
+  const confirm=vi.spyOn(window,'confirm').mockReturnValue(false);
+  renderSplit(state,'en',[run]);
+  fireEvent.click(await screen.findByRole('button',{name:'Assign Split'}));
+  await waitFor(()=>expect((screen.getByLabelText('Preview Split version') as HTMLSelectElement).value).toBe('s2'));
+  expect(assign).toHaveBeenCalledWith('p','split','s2');
+  expect(document.querySelector('[data-split-result]')?.getAttribute('data-split-result')).toBe('s2');
+  fireEvent.click(screen.getByRole('button',{name:'Delete split history Saved_two'}));
+  expect(confirm).toHaveBeenCalled();expect(remove).not.toHaveBeenCalled();
+});
+
+it('reconciles an edited composition draft when an upstream assignment changes',async()=>{
+  const state=fixture();vi.spyOn(api,'workflowState').mockResolvedValue(state);
+  const assign=vi.spyOn(api,'assignWorkflow').mockResolvedValue({...state,assignments:{pseudo:'p2',augmentation:'a1'}});
+  function Snapshot(){const runtime=useWorkflow();return <output data-testid="draft">{JSON.stringify(runtime?.draft)}</output>;}
+  render(<WorkflowProvider projectId="p" revision="1"><WorkflowInputs stages={['pseudo','augmentation']}/><CompositionBoard/><Snapshot/></WorkflowProvider>);
+  await openPicker('pseudo');fireEvent.click(screen.getByRole('button',{name:'Remove Pseudo'}));
+  expect(screen.getByTestId('draft').textContent).toContain('"pseudo_label_run_id":null');
+  fireEvent.change(screen.getByLabelText('Augment input version'),{target:{value:'a1'}});
+  await waitFor(()=>expect(screen.getByTestId('draft').textContent).toContain('"augmentation_run_id":"a1"'));
+  expect(screen.getByRole('button',{name:'Choose Pseudo version'}).textContent).toContain('Second');
+  expect(assign).toHaveBeenCalledWith('p','augmentation','a1');
+});
+
+it('does not let late sample responses replace the selected history version',async()=>{
+  const state=fixture();state.assignments.split='old';
+  const old={id:'old',name:'Old',is_current:false,pseudo_label_run_id:'p1',augmentation_run_id:null,open_data_import_id:null,train_ratio:.8,val_ratio:.1,test_ratio:.1};
+  renderSplit(state,'en',[old,{...old,id:'new',name:'New',is_current:true}]);
+  let resolveOld:(samples:SplitSamples)=>void=()=>{};
+  vi.mocked(api.datasetSplitSamples).mockImplementation(async(_pid,sid)=>sid==='old'?new Promise(resolve=>{resolveOld=resolve;}):{train:[{bucket:'train',image_id:'new-image',image_path:'/tmp/new.jpg',image_url:'/new.jpg',file_name:'new-frame.jpg',annotations:[]}],valid:[],test:[]});
+  await screen.findByRole('option',{name:'New · 0 images'});
+  await waitFor(()=>expect(api.datasetSplitSamples).toHaveBeenCalledWith('p','old',3,expect.any(Number)));
+  fireEvent.change(screen.getByLabelText('Preview Split version'),{target:{value:'new'}});
+  await screen.findByText('new-frame.jpg');
+  await act(async()=>resolveOld({train:[{bucket:'train',image_id:'old-image',image_path:'/tmp/old.jpg',image_url:'/old.jpg',file_name:'old-frame.jpg',annotations:[]}],valid:[],test:[]}));
+  expect(screen.queryByText('old-frame.jpg')).toBeNull();
+  expect(screen.getByText('new-frame.jpg')).toBeTruthy();
+  expect(document.querySelector('[data-split-result]')?.getAttribute('data-split-result')).toBe('new');
 });

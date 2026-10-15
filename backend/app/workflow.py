@@ -183,6 +183,19 @@ def write_state(repo: Repository, project_id: str, assignments: dict, compositio
     repo.db.execute('insert into workflow_states (project_id, assignments_json, composition_id) values (?, ?, ?) on conflict(project_id) do update set assignments_json = excluded.assignments_json, composition_id = excluded.composition_id', (project_id, json.dumps(assignments), composition_id))
 
 
+def link_source(repo: Repository, project_id: str, values: dict) -> None:
+    """Restore the primary Pseudo's source for scalar upstream selectors."""
+    values.pop('source', None)
+    pseudo = repo.get_pseudo_label_run(values.get('pseudo') or '')
+    source_id = pseudo.get('source_asset_id') if pseudo else None
+    if source_id:
+        try:
+            artifact(repo, project_id, 'source', source_id)
+        except ValueError:
+            return
+        values['source'] = source_id
+
+
 def assign(repo: Repository, project_id: str, stage: str, artifact_id: str | None) -> dict:
     with transaction(repo.db):
         state = read_state(repo, project_id)
@@ -205,13 +218,6 @@ def assign(repo: Repository, project_id: str, stage: str, artifact_id: str | Non
             values.pop('pseudo', None)
             if row.get('pseudo_label_run_id'):
                 values['pseudo'] = row['pseudo_label_run_id']
-        if row and stage in ('pseudo', 'augmentation'):
-            pseudo = row if stage == 'pseudo' else repo.get_pseudo_label_run(row.get('pseudo_label_run_id') or '')
-            values.pop('source', None)
-            if pseudo and pseudo.get('source_asset_id'):
-                source_id = pseudo['source_asset_id']
-                if any(item['id'] == source_id and not item['reason'] for item in state['catalog']['source']):
-                    values['source'] = source_id
         if row and stage == 'split':
             for key, field in FIELDS.items():
                 values.pop(key, None)
@@ -233,6 +239,8 @@ def assign(repo: Repository, project_id: str, stage: str, artifact_id: str | Non
             composition_id = row.get('composition_id')
         elif row and stage in ('training', 'conversion') and training_id:
             composition_id = split.get('composition_id')
+        if row and stage in ('pseudo', 'augmentation', 'split', 'training', 'conversion'):
+            link_source(repo, project_id, values)
         write_state(repo, project_id, values, composition_id)
     return read_state(repo, project_id)
 
@@ -247,8 +255,7 @@ def save_composition(repo: Repository, project_id: str, payload: CompositionCrea
         cid = new_id()
         repo.db.execute('insert into dataset_compositions (id, project_id, name, pseudo_label_run_id, augmentation_run_id, open_data_import_id, created_at, branches_json) values (?, ?, ?, ?, ?, ?, ?, ?)', (cid, project_id, name, recipe['pseudo_label_run_id'], recipe['augmentation_run_id'], recipe['open_data_import_id'], utc_now(), json.dumps(recipe['branches']) if 'branches' in recipe else None))
         assignments = {key: recipe[field] for key, field in FIELDS.items() if recipe[field]}
-        if state['assignments'].get('source'):
-            assignments['source'] = state['assignments']['source']
+        link_source(repo, project_id, assignments)
         write_state(repo, project_id, assignments, cid)
     return read_state(repo, project_id)
 
@@ -286,8 +293,7 @@ def create_workflow_router(get_repo: Callable[[], Repository]) -> APIRouter:
                 raise HTTPException(404, 'Composition not found')
             recipe = call(validate_recipe, project_id, item)
             assignments = {key: recipe[field] for key, field in FIELDS.items() if recipe[field]}
-            if state['assignments'].get('source'):
-                assignments['source'] = state['assignments']['source']
+            link_source(repo, project_id, assignments)
             write_state(repo, project_id, assignments, composition_id)
         return call(read_state, project_id)
 

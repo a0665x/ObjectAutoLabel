@@ -6,11 +6,36 @@ Project cards retain confirmed project-package deletion and show the assigned
 project with a red outline and an Assigned button. Active project jobs block
 package deletion.
 
-Pseudo, Review, Augment, Open Data, Train, Validate and Convert expose a
+Pseudo, Review, Augment, Open Data, Split, Train, Validate and Convert expose a
 shared Assign & history footer. Assign changes the project runtime selection,
 not the underlying saved build. Upstream changes clear dependent assignments.
-Existing deletion actions remain available. Split has no duplicate Assign footer;
-its detailed history is collapsed beneath Saved Splits.
+Input selectors use a green gradient; retained history uses a light-blue
+gradient. Split's Assign/View/Delete actions remain visible rather than hidden
+under a separate lineage list. Source parenting is restored when assigning a
+Split, Train, Convert or saved composition as well as Pseudo/Augment.
+
+## One Split page context
+
+Split has explicit New and History modes. Selecting History binds the source
+board, recorded ratios, sample images and coverage to the same saved Split id.
+The board is read-only and includes every recorded parallel branch, including
+when its saved composition has since been deleted. View does not assign; Assign
+persists the choice for Train and downstream tabs.
+
+New edits a provider-owned composition draft and has no saved result. A saved
+combination dropdown and the existing source pickers edit that same draft. Do
+not show the newest unrelated Split below it. Starting New from a historical
+version copies its source recipe and ratios without changing the saved build.
+A successful build selects only its own newly materialized name/composition,
+not whichever historical output happened to be newest while the job was queued.
+
+History selection survives source-tab visits and ordinary polling. Changed
+project assignments reconcile the draft and clear obsolete version-inspector
+focus; unchanged assignments must not reset selection. Late sample responses
+are ignored after changing version or mode. Deletion keeps the other versions
+and refreshes selectors; a missing selected history is reported explicitly.
+
+## Sources and compositions
 
 Source history also supports persisted `source` assignment. Each row shows the
 registered folder/video basename, original-image count, path, timestamp and id.
@@ -49,7 +74,7 @@ One source version cannot be included twice; overlapping raw originals across
 Pseudo versions are rejected during materialization rather than silently given
 conflicting labels. Select distinct sources or retained Augment outputs instead.
 
-The Split page follows **select source cards → set ratios → build**. Only the
+In New mode the Split page follows **select source cards → set ratios → build**. Only the
 current project's Pseudo/Augment/Open Data versions appear here, not every
 workflow stage. The compact Pseudo → Augment + Open Data → Split diagram shows
 the current version/count at each node. A hover or keyboard-focus preview fans
@@ -120,6 +145,47 @@ clears annotation caches and session history, and dirty edits require confirmati
 New Pseudo runs preserve annotation snapshots for historical Augment/Split input.
 Legacy runs whose originals were already overwritten cannot be reconstructed;
 choose a retained Augment build or regenerate Pseudo when the API reports this.
+
+## Saved Split source coverage (2026-10-14)
+
+Saved Splits expose actual bucket proportions and each Source/Pseudo/Augment
+batch's counts and shares of the combined train/validation/test buckets.
+Official Open Data membership remains unchanged; therefore combined proportions
+may differ from the requested local split ratios. The inspector does not alter
+the existing seed-42 shuffle or prevent related-frame/augmentation leakage.
+
+The source/filename-ordered coverage chart aggregates at most 128 bins. Native
+dual handles zoom a read-only inspection window. Three separate horizontal rows
+show Train/Validation/Test density, not a stack of unrelated versions. The
+source filter is removed; all coverage belongs to the page's selected Split.
+Batch counts/shares are under a collapsed detail disclosure. Folders belonging
+to the same Pseudo/Augment pair are combined into one row matching the input
+board, not presented as duplicate source-version cards. Counts provide a
+text alternative to the colored chart.
+
+Hover, keyboard focus/change, or touch resolves one saved member after a 180ms
+dwell and loads only a JPEG bounded to 256×160. A native top-layer popover is
+viewport-contained. The component caches at most eight Blob URLs and 32 small
+metadata responses, aborts superseded requests, revokes evictions, and releases
+all URLs on Split/project change or page exit. No original images are prefetched
+and the backend writes no thumbnail cache.
+
+New builds atomically publish frozen ids/names and compact ordered image rows in
+`coverage_manifest.json`. Old builds reconstruct available provenance on GET,
+explicitly label legacy metadata, and never create a retrospective manifest.
+The saved DB bucket ids and copied label files remain authoritative.
+
+Coverage/thumbnail tests verify multiple parallel groups, exact counts including
+official Open Data groups, later assignment/name independence, membership and
+symlink guards, read-only legacy fallback, compact JSON and no eager image loads.
+Initial mocked browser acceptance exercised keyboard preview, pointer dragging,
+four languages and five widths. Thirteen thumbnail loads
+retained eight active URLs, evicted five, and released all on page exit; zero
+data-changing API requests and page errors occurred.
+Unified-context acceptance subsequently verified New/History switching, source
+branch binding, visible Assign/Delete, Split → Train and Pseudo → Split updates,
+mocked confirmed deletion, gradients and 20 locale/width combinations. No real
+history was deleted.
 
 ## Persistence and validation
 

@@ -3,16 +3,16 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 import time
-from typing import Any
+from typing import Any, Literal
 from urllib.error import URLError
 from urllib.request import Request as UrlRequest, urlopen
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import workflow, model_lineage, open_data, project_services, world_models
+from . import workflow, model_lineage, open_data, project_services, world_models, split_coverage
 from .auth import AuthService, AuthSettings
 from .conversion_runtime import ConversionCapability, detect_conversion_capabilities
 from .world_model_catalog import PROMPT_ENCODER_FILENAMES, describe_world_model, list_world_model_details
@@ -925,6 +925,38 @@ def list_dataset_split_samples(project_id: str, split_id: str, limit_per_bucket:
         return project_services.list_dataset_split_samples(repo, project_id, split_id, limit_per_bucket, sample_seed)
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.get("/api/projects/{project_id}/dataset-splits/{split_id}/coverage")
+def dataset_split_coverage(project_id: str, split_id: str, group_id: str | None = None,
+                          start: float = Query(0, ge=0, le=1), end: float = Query(1, ge=0, le=1),
+                          bins: int = Query(64, ge=1, le=128)) -> dict[str, Any]:
+    try:
+        return split_coverage.distribution(repo, project_id, split_id, group_id=group_id, start=start, end=end, bins=bins)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/projects/{project_id}/dataset-splits/{split_id}/coverage-sample")
+def dataset_split_coverage_sample(project_id: str, split_id: str, bucket: Literal['train', 'valid', 'test'],
+                                 position: float = Query(0, ge=0, le=1), group_id: str | None = None) -> dict[str, Any]:
+    try:
+        return split_coverage.sample(repo, project_id, split_id, bucket=bucket, position=position, group_id=group_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/projects/{project_id}/dataset-splits/{split_id}/thumbnail/{image_id}")
+def dataset_split_thumbnail(project_id: str, split_id: str, image_id: str) -> Response:
+    try:
+        return Response(split_coverage.thumbnail(repo, project_id, split_id, image_id), media_type='image/jpeg',
+                        headers={'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff'})
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/projects/{project_id}/training-runs")

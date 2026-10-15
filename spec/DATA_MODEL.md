@@ -176,6 +176,17 @@ Dataset compositions support multiple ordered Pseudo/Augment pairs in
 remain compatible and represent the first pair. Split `composition_json` freezes
 every pair's lineage, names and counts for downstream selectors and deletion.
 
+New Split directories also contain `coverage_manifest.json`: schema version 1,
+shuffle seed 42, frozen Source/Pseudo/Augment/Open Data ids and names, and compact
+`[image_id, group_id, original_filename]` rows ordered by group then filename.
+The DB's saved `image_ids_json` remains the membership authority. The coverage
+manifest is staged and published with the copied images/labels and dataset YAML;
+later assignment or run-name changes do not rewrite provenance. Legacy inspection
+reconstructs metadata from retained image/history records, labels its provenance
+as legacy, and never backfills a file during GET. Thumbnails use saved copies and
+labels, not live Review annotations. Metadata parsing caches at most four JSON
+files; no generated thumbnail image cache is persisted.
+
 Project assignments, saved dataset combinations, draggable Split recipes and
 Pseudo annotation snapshots are described in
 [Workflow assignments and compositions](references/workflow-assignments-and-compositions.md).

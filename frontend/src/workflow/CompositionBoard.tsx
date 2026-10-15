@@ -1,7 +1,7 @@
 import {useEffect, useId, useRef, useState} from 'react';
 import {ArrowRight, ArrowUpRight, Check, ChevronDown, Layers, Plus, SlidersHorizontal, Trash2, X} from 'lucide-react';
 import {api} from '../api/client';
-import {stageNames, useWorkflow, VersionDetails, type Version} from './WorkflowState';
+import {stageNames, useWorkflow, VersionDetails, type Version, type Recipe} from './WorkflowState';
 import {chooseVersion, inputStages, recipeFields, recipeIssue, sameRecipe, sourceBranches, withBranches, type InputStage} from './composition';
 import {workflowText} from './text';
 import {WorkflowError} from './WorkflowError';
@@ -9,7 +9,7 @@ import './CompositionFlow.css';
 
 const hints:Record<InputStage,string>={pseudo:'Base labels',augmentation:'Optional · uses its recorded Pseudo source',open_data:'Optional · adds images'};
 
-export function CompositionBoard({disabled=false,onConfigureSplit}:{disabled?:boolean;onConfigureSplit?:()=>void}) {
+export function CompositionBoard({disabled=false,onConfigureSplit,recipe,splitName,splitCount}:{disabled?:boolean;onConfigureSplit?:()=>void;recipe?:Recipe;splitName?:string;splitCount?:number}) {
   const runtime=useWorkflow();
   const [name,setName]=useState('');
   const [notice,setNotice]=useState<{key:string;name?:string}>({key:''});
@@ -32,10 +32,11 @@ export function CompositionBoard({disabled=false,onConfigureSplit}:{disabled?:bo
     return ()=>document.removeEventListener('pointerdown',dismiss);
   },[activeStage,activeBranch]);
   if(!runtime)return null;
-  const {state,busy,error,change,projectId,draft,setDraft,saveDraft,viewVersion,language}=runtime;
+  const {state,busy,error,change,projectId,setDraft,saveDraft,viewVersion,language}=runtime;
+  const draft=recipe??runtime.draft,readOnly=Boolean(recipe);
   const w=workflowText(language);
   if(!state)return <section className="panel wide"><p>{w('Loading source versions…')}</p><WorkflowError message={error}/></section>;
-  const locked=busy||disabled;
+  const locked=busy||disabled||readOnly;
   const issue=recipeIssue(state,draft);
   const branches=sourceBranches(draft);
   const selectedId=(stage:InputStage,index=activeBranch)=>stage==='open_data'?draft.open_data_import_id:branches[index]?.[recipeFields[stage]];
@@ -76,8 +77,9 @@ export function CompositionBoard({disabled=false,onConfigureSplit}:{disabled?:bo
       </span>
     </button>;
   }
-  return <section className="panel wide composition-board" aria-label={w('Dataset sources')}>
-    <header className="composition-heading"><h2>{w('Dataset sources')}</h2><p className="muted">{w('Click a step to switch versions.')}</p></header>
+  return <section className="panel wide composition-board workflow-inputs" data-readonly={readOnly} aria-label={w('Dataset sources')}>
+    <header className="composition-heading"><h2>{w('Dataset sources')}</h2><p className="muted">{w(readOnly?'Recorded inputs of this Split. Choose New to edit.':'Click a step to switch versions.')}</p></header>
+    {!readOnly&&<label><span>{w('Saved combination input')}</span><select value={currentCombination?.id??''} disabled={locked} onChange={event=>{const item=state.compositions.find(item=>item.id===event.target.value&&!item.reason);if(item){setDraft(withBranches(item,sourceBranches(item)));setActiveStage(null);setNotice({key:'Using “{name}”. Set ratios and build below.',name:item.name});}}}><option value="">{w('Custom combination')}</option>{state.compositions.map(item=><option key={item.id} value={item.id} disabled={Boolean(item.reason)}>{item.name}</option>)}</select></label>}
     <div ref={flowRef} className="composition-flow-workspace" onKeyDown={event=>{if(event.key==='Escape'&&activeStage){event.preventDefault();closePanel();}}}>
     <div className="composition-flow" aria-label={w('Dataset processing flow')}>
       <div className="composition-source-groups">
@@ -85,14 +87,14 @@ export function CompositionBoard({disabled=false,onConfigureSplit}:{disabled?:bo
           {branches.length>1&&<div className="composition-group-heading"><strong>{w('Source group {number}',{number:index+1})}</strong><button type="button" className="secondary composition-remove" disabled={locked} aria-label={w('Remove source group {number}',{number:index+1})} onClick={()=>{setDraft(withBranches(draft,branches.filter((_,i)=>i!==index)));setActiveStage(null);addRef.current?.focus();}}><X size={16}/></button></div>}
           {flowNode('pseudo',index)}<span className="composition-connector" aria-label={w('Process')} data-kind="arrow"><ArrowRight size={20}/></span>{flowNode('augmentation',index)}
         </div>)}
-        <button ref={addRef} type="button" className="secondary composition-add-group" disabled={locked||branches.length>=32} onClick={()=>{setDraft(withBranches(draft,[...branches,{pseudo_label_run_id:null,augmentation_run_id:null}]));setActiveBranch(branches.length);setActiveStage('pseudo');setNotice({key:'Choose Pseudo, then its Augment for the new group.'});}}><Plus size={17}/>{w('Add Pseudo → Augment group')}</button>
+        {!readOnly&&<button ref={addRef} type="button" className="secondary composition-add-group" disabled={locked||branches.length>=32} onClick={()=>{setDraft(withBranches(draft,[...branches,{pseudo_label_run_id:null,augmentation_run_id:null}]));setActiveBranch(branches.length);setActiveStage('pseudo');setNotice({key:'Choose Pseudo, then its Augment for the new group.'});}}><Plus size={17}/>{w('Add Pseudo → Augment group')}</button>}
       </div>
       <span className="composition-connector" aria-label={w('Add images')} data-kind="plus"><Plus size={20}/></span>{flowNode('open_data')}
       <span key={JSON.stringify(draft)} className="composition-connector" data-kind="arrow" aria-label={w('Build')}><ArrowRight size={20}/></span>
       <button type="button" className="composition-flow-node composition-flow-result" data-stage="split" disabled={locked||!onConfigureSplit}
         aria-label={w('Set ratios & build')} onClick={()=>{setActiveStage(null);onConfigureSplit?.();}}>
         <span className="composition-flow-face"><span className="composition-flow-label"><SlidersHorizontal size={17}/>{w('Split')}<ArrowUpRight size={16}/></span>
-          <strong>{w('New Split')}</strong><span className="composition-flow-meta">{w('Approx. {count} images',{count:total.toLocaleString()})}</span><span className="composition-flow-footer">{w('Set ratios')}</span></span>
+          <strong>{splitName??w('New Split')}</strong><span className="composition-flow-meta">{w(splitCount===undefined?'Approx. {count} images':'{count} images',{count:(splitCount??total).toLocaleString()})}</span><span className="composition-flow-footer">{w(readOnly?'Saved version':'Set ratios')}</span></span>
       </button>
     </div>
     <div id={panelId} hidden={!activeStage}>
@@ -120,7 +122,7 @@ export function CompositionBoard({disabled=false,onConfigureSplit}:{disabled?:bo
       </section>;
     })()}</div></div>
     <p className="composition-feedback" role="status">{notice.key?w(notice.key,{name:notice.name??''}):w(branches.length>1?'Each group uses Augment or Pseudo once; groups and Open Data are added.':draft.augmentation_run_id?'Augment replaces Pseudo; Open Data is added.':'Selected Pseudo + Open Data.')}</p>
-    <details className="composition-history">
+    {!readOnly&&<details className="composition-history">
       <summary>{w('Saved combinations')} <span className="muted">({state.compositions.length})</span></summary>
       <details className="composition-save"><summary>{w('Save current combination')}</summary>
         <div className="inline-actions"><label><span>{w('Combination name')}</span><input value={name} onChange={event=>setName(event.target.value)} maxLength={120}/></label>
@@ -143,7 +145,7 @@ export function CompositionBoard({disabled=false,onConfigureSplit}:{disabled?:bo
             if(window.confirm(w('Delete saved combination “{name}”? Existing Split snapshots and training results will be kept.',{name:item.name})))void change(()=>api.deleteComposition(projectId,item.id));
           }}><Trash2 size={16}/></button></div>
       </article>)}
-    </details>
+    </details>}
     <WorkflowError message={localError||error}/>
   </section>;
 }

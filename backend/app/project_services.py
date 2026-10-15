@@ -775,7 +775,7 @@ def create_dataset_split(
                 if image['id'] in seen_images:
                     raise ValueError('Source groups contain overlapping original images; choose distinct inputs or saved Augment builds')
                 seen_images.add(image['id'])
-                project_images.append(image)
+                project_images.append({**image, '_split_pseudo_id': pseudo_id})
     random.Random(42).shuffle(project_images)
     open_data_import = None
     if open_data_import_id:
@@ -854,6 +854,10 @@ def create_dataset_split(
         names = {int(row["class_id"]): row["class_name"] for row in schema_rows}
         staging_dir.mkdir(parents=True, exist_ok=True)
         (staging_dir / "image_manifest.json").write_text(json.dumps(image_manifest), encoding="utf-8")
+        from .split_coverage import freeze
+        branches = recipe_branches(recipe) if composition else [dict(pseudo_label_run_id=pseudo_label_run_id, augmentation_run_id=augmentation_run_id)]
+        coverage = freeze(repo, project_id, images, branches)
+        (staging_dir / "coverage_manifest.json").write_text(json.dumps(coverage, separators=(',', ':')), encoding="utf-8")
         (staging_dir / "dataset.yaml").write_text(
             yaml.safe_dump(
                 {

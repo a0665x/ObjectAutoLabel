@@ -61,3 +61,20 @@ def test_tracking_off_keeps_raw_boxes_as_metadata_without_baking_annotations(mon
     assert session.stats["detections"] == 1
     assert session.stats["tracks"] == 0
     assert np.array_equal(output, frame), "Labels must remain resizable in the browser, not baked into the video"
+
+
+def test_sampling_locks_yolo_input_pixels_not_the_later_playback_frame(monkeypatch):
+    """A delayed click must retrieve the red inference crop, never later blue pixels."""
+    config = stream.StreamConfig(model_id="fixture", source="upload", source_id="fixture", tracking=False)
+    session = stream.StreamSession(config, "/fixture.pt", Path("/fixture.mp4"))
+    frame = np.zeros((60, 80, 3), np.uint8)
+    frame[10:50, 10:50] = [0, 0, 255]  # decoded frames are BGR
+    monkeypatch.setattr(stream, "predict_frame", lambda *_a, **_k: (detection(frame), "NMS"))
+    session.predict(None, frame)
+    cached = session.raw_detections[0]
+    frame[:] = [255, 0, 0]  # playback/source buffer has advanced
+    sample = session.bbox_cache.get(cached["cache_id"], pin=True)
+    assert sample["features"]["meanRGB"] == pytest.approx([255, 0, 0])
+    assert sample["frame_index"] == 0
+    assert sample["detection_index"] == 0
+    assert sample["box"] == [10, 10, 50, 50]

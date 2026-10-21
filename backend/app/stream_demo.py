@@ -301,6 +301,10 @@ class StreamSession:
         self.identity = None
         self.selection_requests = []
         self.objects: list[dict[str, Any]] = []
+        from .stream_bbox_cache import BboxFeatureCache
+        self.bbox_cache = BboxFeatureCache()
+        self.raw_detections: list[dict[str, Any]] = []
+        self.raw_detection_counts = {}
         self.playing = asyncio.Event()
         self.playing.set()
 
@@ -321,6 +325,15 @@ class StreamSession:
         self.stats["postprocess"] = mode
         from .stream_labels import apply_stream_labels
         apply_stream_labels(result, self.label_names)
+        from .stream_tracking import display_detections
+        # Capture immutable evidence from precisely the YOLO input frame, before
+        # ByteTrack/identity smoothing can replace boxes or suppress an ID.
+        detections = display_detections(result, self.config.conf)
+        from collections import Counter
+        self.raw_detection_counts = dict(Counter(str(item['class_id']) for item in detections))
+        self.raw_detections = self.bbox_cache.capture(
+            frame, detections, self.stats["frames"],
+            self.config.start_seconds + self.stats["frames"] / self.config.fps)
         if self.config.tracking:
             if self.tracker is None:
                 from .stream_tracking import StreamTracker
@@ -345,6 +358,20 @@ class StreamSession:
         self.objects = display_detections(result, self.config.conf)
         self.stats.update(detections=len(self.objects), tracks=0, untracked=len(self.objects))
         return frame
+
+    def bbox_control(self, message):
+        """Runs on the control task even while video/inference is paused."""
+        if message["type"] == "bbox_release":
+            self.bbox_cache.release()
+            return None
+        key, request_id = message.get("cache_id"), message.get("request_id")
+        if not isinstance(key, str) or len(key) > 120 or type(request_id) is not int:
+            raise ValueError("Invalid bbox cache request")
+        if type(message.get("pin", False)) is not bool:
+            raise ValueError("Invalid bbox cache pin")
+        sample = self.bbox_cache.get(key, pin=message.get("pin", False))
+        return {"type": "bbox_sample", "request_id": request_id,
+                "sample": sample, "error": None if sample else "expired"}
 
     async def run(self, websocket: Any) -> None:
         disable_ultralytics_autoinstall()
@@ -378,6 +405,8 @@ class StreamSession:
                 frame = await asyncio.to_thread(self.predict, model, frame)
                 await websocket.send_json({"type": "tracks", "time": self.stats["frames"] / self.config.fps,
                                            "objects": self.objects, "width": self.config.width, "height": self.config.height,
+                                           "raw_detections": self.raw_detections, "bbox_cache": self.bbox_cache.status(),
+                                           "raw_detection_counts": self.raw_detection_counts,
                                            "identity": self.identity.debug if self.identity else {},
                                            "dt_ms": 1000 / self.config.fps})
                 self.stats.update(frames=self.stats["frames"] + 1, inference_ms=round((time.monotonic() - start) * 1000, 1))
@@ -399,6 +428,11 @@ class StreamSession:
                 message = await websocket.receive_json()
                 if message.get("type") == "stop":
                     return
+                if message.get("type") in {"bbox_release", "bbox_sample"}:
+                    reply = self.bbox_control(message)
+                    if reply:
+                        await websocket.send_json(reply)
+                    continue
                 if message.get("type") == "playback":
                     if type(message.get("paused")) is not bool:
                         raise ValueError("Playback paused must be a boolean")
@@ -441,3 +475,6 @@ class StreamSession:
             except asyncio.TimeoutError:
                 process.kill()
                 await asyncio.wait_for(process.communicate(), 3)
+        self.bbox_cache.close()
+        self.raw_detections = []
+        self.raw_detection_counts = {}

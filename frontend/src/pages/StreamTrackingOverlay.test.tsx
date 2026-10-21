@@ -19,6 +19,12 @@ it('keeps annotation size in screen pixels across viewport changes',()=>{
   bounds.mockRestore();
 });
 const frame = { time: 2, width: 640, height: 360, objects: [{ id: '0:7', name: 'person', class_id: 0, score: .9, box: [100, 100, 150, 200] }] };
+it('allows color sampling from a raw detection without any tracking ID',()=>{
+  const video={current:document.createElement('video')};video.current.currentTime=2;
+  const onSelect=vi.fn(),onPixelSelect=vi.fn(),raw={...frame,objects:[{...frame.objects[0],id:null,tracked:false,detection_index:2}]};
+  render(<StreamTrackingOverlay video={video} frames={{current:[raw]}} selected={null} onSelect={onSelect} onTime={vi.fn()} active colorSampling onPixelSelect={onPixelSelect} viz={{enabled:false,trails:false,prediction:false,topology:false,diagnostics:false}}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Sample box person 2'}));expect(onPixelSelect).toHaveBeenCalledWith(raw.objects[0],raw);expect(onSelect).not.toHaveBeenCalled();
+});
 
 it('updates both box diagnostics and selected-target text on every language change without replacing frames', () => {
   const video = { current: document.createElement('video') }; video.current.currentTime = 2;

@@ -2,14 +2,18 @@ import { useEffect, useRef, useState, type CSSProperties, type RefObject } from 
 import type { TrackingViz, TrackingDisplayStatus } from './TrackingSettingsPanel';
 import type { Language } from '../types';
 import { trackingText, trackingState, trackingReason } from './trackingText';
+import {pixelTrackingText} from './pixelAppearanceText';
+import type {YoloEvidence} from './bboxSampleCache';
 
 export type TrackedObject = { id: string | null; tracked?:boolean; detection_index?:number; raw_id?:string; box: number[]; observed_box?:number[]; score: number; class_id: number; name: string;
-  predicted?:boolean; trail?:number[][]; anchors?:Array<{raw_id:string;dx_norm:number;dy_norm:number}>;
+  appearance_estimated?:boolean;appearance_mode?:'detection'|'search'|'hold';predicted?:boolean; trail?:number[][]; anchors?:Array<{raw_id:string;dx_norm:number;dy_norm:number}>;
   forecast?:{bbox:number[];horizon_ms:number}|null;
   uncertainty?:{center:number[];radii:number[];angle:number};
   motion?:{valid:boolean;dt_ms:number|null;reason?:string;innovation?:{center_distance_norm:number|null};image_velocity?:{speed_norm_per_s:number}};
 };
 export type TrackingFrame = { time: number; width: number; height: number; objects: TrackedObject[];dt_ms?:number;
+  raw_detections?:YoloEvidence[];
+  raw_detection_counts?:Record<string,number>;
   identity?:{state?:string;reason?:string;selected?:string;score?:number;margin?:number;evidence_coverage?:number;
     confirmation_count?:number;confirmation_required?:number;misses?:number;reference_age_ms?:number;bridge_gain?:number;direct_suspect?:boolean;center_innovation_norm?:number|null;low_evidence?:boolean};
 };
@@ -24,10 +28,11 @@ export function frameAt(frames: TrackingFrame[], time: number): TrackingFrame | 
   return frame && time - frame.time < (frame.dt_ms === undefined ? .25 : frame.dt_ms / 1000 + .05) ? frame : undefined;
 }
 
-export function StreamTrackingOverlay({ video, frames, selected, onSelect, onTime, active, viz, annotationSize=12, onStatus, language='en' }: {
+export function StreamTrackingOverlay({ video, frames, selected, onSelect, onTime, active, viz, annotationSize=12, onStatus, language='en',colorSampling=false,onPixelSelect }: {
   video: RefObject<HTMLVideoElement | null>; frames: RefObject<TrackingFrame[]>;
   selected: string | null; onSelect: (id: string | null, time?:number) => void; onTime: (time: number) => void; active: boolean; viz?:TrackingViz; language?:Language;
   annotationSize?:number; onStatus?:(status:TrackingDisplayStatus|undefined)=>void;
+  colorSampling?:boolean;onPixelSelect?:(object:TrackedObject,frame:TrackingFrame)=>void;
 }) {
   const [frame, setFrame] = useState<TrackingFrame>();
   const svgRef=useRef<SVGSVGElement>(null);
@@ -76,12 +81,14 @@ export function StreamTrackingOverlay({ video, frames, selected, onSelect, onTim
       {visible.map((object, index) => {
         const [x1, y1, x2, y2] = !showTracking&&object.observed_box?object.observed_box:object.box;
         const trackable = showTracking && object.id !== null && object.tracked !== false;
-        const chosen = trackable && selected === object.id;
+        const pickable=(showTracking&&trackable)||(colorSampling&&!object.predicted);
+        const choose=()=>{if(colorSampling&&onPixelSelect&&frame)onPixelSelect(object,frame);else if(object.id)onSelect(selected===object.id?null:object.id,frame?.time);};
+        const chosen = !colorSampling&&trackable && selected === object.id;
         const cx=(x1+x2)/2,cy=(y1+y2)/2;
         const uncertainty=object.uncertainty;
         const predicted=object.forecast?.bbox;
         const w=frame?.width??640,h=frame?.height??360;
-        return <g key={object.id ?? `detection:${object.detection_index ?? index}`} className={chosen ? "stream-track selected" : trackable ? "stream-track" : "stream-track stream-detection-only"}>
+        return <g key={object.id ?? `detection:${object.detection_index ?? index}`} className={chosen ? "stream-track selected" : pickable ? "stream-track" : "stream-track stream-detection-only"}>
           {showTracking&&<g className="stream-motion-viz" aria-hidden="true">
             {viz?.topology && object.anchors?.map(a=><line className="stream-topology-link" key={a.raw_id} x1={cx} y1={cy} x2={cx+a.dx_norm*w} y2={cy+a.dy_norm*h}/>)}
             {viz?.trails && object.trail && <polyline className="stream-kalman-trail" points={object.trail.map(p=>p.join(',')).join(' ')}/>}
@@ -90,9 +97,9 @@ export function StreamTrackingOverlay({ video, frames, selected, onSelect, onTim
           </g>}
           <rect x={x1} y={y1} width={Math.max(0, x2 - x1)} height={Math.max(0, y2 - y1)}
             strokeDasharray={object.predicted?'7 4':undefined}
-            role={trackable ? "button" : undefined} tabIndex={trackable ? 0 : undefined} aria-pressed={trackable ? chosen : undefined} aria-label={trackable ? `${t('track')} ${object.name} ${object.id}` : `${t('detectedOnly')} ${object.name} ${object.score.toFixed(2)}`}
-            onClick={trackable ? () => onSelect(chosen ? null : object.id,frame?.time) : undefined}
-            onKeyDown={trackable ? (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(chosen ? null : object.id,frame?.time); } } : undefined} />
+            role={pickable ? "button" : undefined} tabIndex={pickable ? 0 : undefined} aria-pressed={pickable ? chosen : undefined} aria-label={colorSampling&&pickable?`${pixelTrackingText(language,'pick')} ${object.name} ${object.detection_index??object.id}`:trackable ? `${t('track')} ${object.name} ${object.id}` : `${t('detectedOnly')} ${object.name} ${object.score.toFixed(2)}`}
+            onClick={pickable ? choose : undefined}
+            onKeyDown={pickable ? (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); choose(); } } : undefined} />
           <text x={Math.max(2, x1)} y={Math.max(fontSize+2, y1 - 5)}>{chosen ? `${t('selected')} · ` : ""}{object.name}{trackable ? ` #${object.id}` : showTracking?` · ${t('detectedOnly')}`:''} · {object.score.toFixed(2)}</text>
           {viz?.diagnostics && trackable && <text className="stream-motion-label" x={Math.max(2,x1)} y={Math.min(h-4,y2+fontSize)}>{t('raw')} {object.raw_id??object.id} · {object.predicted?t('bridge'):object.motion?.valid?'Kalman':t('warmup')} · Δt {object.motion?.dt_ms?.toFixed(0)??'—'} ms · v {object.motion?.image_velocity?.speed_norm_per_s.toFixed(2)??'—'} /s</text>}
         </g>;

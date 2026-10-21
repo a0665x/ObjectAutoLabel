@@ -16,6 +16,14 @@ const models = [
 ];
 const capabilities = { available: true, missing_plugins: [], cameras: [], cuda: true, mime: "video/mp4", max_upload_bytes: 1024,
   engines: { pt: { available: true }, onnx: { available: true }, tflite: { available: true } } };
+it('provides an explicit default-off color tracking checkbox and enables box sampling independently of IDs',async()=>{
+  render(<StreamDemoPage project={project}/>);
+  await screen.findByRole('checkbox',{name:'Color-sample tracking'});
+  const checkbox=screen.getByRole('checkbox',{name:'Color-sample tracking'}) as HTMLInputElement;
+  expect(checkbox.checked).toBe(false);fireEvent.click(checkbox);expect(checkbox.checked).toBe(true);
+  expect((screen.getByLabelText('Show tracking overlays') as HTMLInputElement).checked).toBe(true);
+  fireEvent.click(checkbox);expect(checkbox.checked).toBe(false);
+});
 
 class FakeSocket {
   static OPEN = 1;

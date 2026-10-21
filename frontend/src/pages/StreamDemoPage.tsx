@@ -4,6 +4,12 @@ import type { Project, Language, ClassSchema } from "../types";
 import { StreamSegments, StreamSwitch } from './StreamControls';
 import { streamUiText, type StreamUiKey } from './streamUiText';
 import { trackingText,trackingVisualizationHelp } from './trackingText';
+import {SelectedPixelInspector} from './SelectedPixelInspector';
+import {ColorSampleTracker} from './ColorSampleTracker';
+import type {ColorSeed,ColorEstimate,SampleBox} from './colorSampleTracking';
+import {BboxSampleClient,type ReadBboxSample} from './bboxSampleCache';
+import {pixelTrackingText,pixelText} from './pixelAppearanceText';
+import {ParameterHelp} from './ParameterHelp';
 import { streamRequest, uploadStreamVideo, type StreamCapabilities, type StreamModel, type StreamUpload } from "../api/streamDemo";
 import { createStreamPlayer } from "./streamPlayer";
 import { StreamTrackingOverlay, type TrackingFrame } from "./StreamTrackingOverlay";
@@ -70,7 +76,11 @@ export function StreamDemoPage({ project, language='en' }: { project: Project; l
   const [flowSummary,setFlowSummary]=useState<FlowSummary>();
   const [flowReset,setFlowReset]=useState(0);
   const [selectedTrack, setSelectedTrack] = useState<string | null>(null);
+  const [colorSampling,setColorSampling]=useState(false),[colorSeed,setColorSeed]=useState<ColorSeed|null>(null),[colorEstimate,setColorEstimate]=useState<ColorEstimate>();
+  const colorSequence=useRef(0);
   const trackingFrames = useRef<TrackingFrame[]>([]);
+  const bboxClient=useRef(new BboxSampleClient());
+  const readBboxSample=useCallback<ReadBboxSample>((key,pin=false)=>bboxClient.current.request(socketRef.current,key,pin),[]);
   const [paused, setPaused] = useState(false);
   const pausePosition=useRef(0);
   const [appliedConfigKey,setAppliedConfigKey]=useState('');
@@ -112,6 +122,8 @@ export function StreamDemoPage({ project, language='en' }: { project: Project; l
 
   function dispose() {
     generation.current += 1;
+    colorSequence.current++;
+    bboxClient.current.clear();
     const socket = socketRef.current;
     socketRef.current = null;
     if (socket) { socket.onclose = null; socket.onmessage = null; socket.onerror = null; socket.onopen = null; socket.close(); }
@@ -119,6 +131,7 @@ export function StreamDemoPage({ project, language='en' }: { project: Project; l
     playerRef.current = null;
     trackingFrames.current = [];
     setSelectedTrack(null);
+    setColorSeed(null);setColorEstimate(undefined);
     setRunningModel(undefined);
     setDisplayStatus(undefined);
     setAppliedConfigKey('');
@@ -289,9 +302,16 @@ export function StreamDemoPage({ project, language='en' }: { project: Project; l
       socket.onmessage = (event) => {
         if (event.data instanceof ArrayBuffer) { playerRef.current?.append(event.data); return; }
         const message = JSON.parse(event.data);
+        if(bboxClient.current.receive(message))return;
         if (message.type === "tracks") {
           trackingFrames.current.push(message);
+          // Full feature vectors are bounded too, not only server-side crops.
           if (trackingFrames.current.length > 3600) trackingFrames.current.shift();
+          let featureCount=0;
+          for(let i=trackingFrames.current.length-1;i>=0;i--){
+            featureCount+=trackingFrames.current[i].raw_detections?.length??0;
+            if((i<trackingFrames.current.length-180||featureCount>2048)&&i<trackingFrames.current.length-1)trackingFrames.current[i].raw_detections=[];
+          }
           return;
         }
         if (message.postprocess) setPostprocess(message.postprocess);
@@ -316,6 +336,25 @@ export function StreamDemoPage({ project, language='en' }: { project: Project; l
   function selectTrack(id: string | null, time = videoRef.current?.currentTime ?? 0) {
     setSelectedTrack(id);
     if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({type:'select_track',id,time}));
+  }
+  async function selectColorSample(object:import('./StreamTrackingOverlay').TrackedObject,frame:TrackingFrame) {
+    if(object.predicted)return;
+    const raw=frame.raw_detections?.find(item=>item.detection_index===object.detection_index&&item.class_id===object.class_id);
+    if(!raw){setError(pixelText(language,'cacheExpired'));return;}
+    const sequence=++colorSequence.current,epoch=generation.current;
+    try{
+      const sample=await readBboxSample(raw.cache_id,true);
+      if(sequence!==colorSequence.current||epoch!==generation.current)return;
+      const {rgba_base64:_,...evidence}=sample,b=sample.crop_box;
+      selectTrack(null);setColorEstimate(undefined);setError('');
+      setColorSeed({token:`sample:${sequence}`,classId:sample.class_id,name:sample.name,features:sample.features,time:sample.media_time,width:sample.width,height:sample.height,evidence,
+        box:[b[0]/sample.image_width,b[1]/sample.image_height,b[2]/sample.image_width,b[3]/sample.image_height] as SampleBox});
+    }catch{if(sequence===colorSequence.current&&epoch===generation.current)setError(pixelText(language,'cacheExpired'));}
+  }
+
+  function clearColorSample() {
+    colorSequence.current++;setColorSeed(null);setColorEstimate(undefined);
+    if(socketRef.current?.readyState===WebSocket.OPEN)socketRef.current.send(JSON.stringify({type:'bbox_release'}));
   }
 
   async function uploadVideo(file?: File) {
@@ -418,6 +457,12 @@ export function StreamDemoPage({ project, language='en' }: { project: Project; l
           <label className="stream-slider" htmlFor="stream-iou">IoU<output htmlFor="stream-iou">{postprocess === "NMS-free" || postprocess === "Embedded NMS" ? "N/A" : iou.toFixed(2)}</output><input id="stream-iou" aria-label="IoU" disabled={postprocess === "NMS-free" || postprocess === "Embedded NMS"} type="range" min={0} max={1} step={0.01} value={iou} onChange={(e) => setIou(Number(e.target.value))} /></label>
           <label className="stream-slider" htmlFor="stream-annotation-size">{t('annotationSize')}<output htmlFor="stream-annotation-size">{annotationSize} px</output><input id="stream-annotation-size" aria-label={t('annotationSize')} disabled={cliActive} type="range" min={8} max={24} step={1} value={annotationSize} onChange={e=>setAnnotationSize(Number(e.target.value))}/></label>
           {cliActive&&<small>{t('terminalSize')}</small>}
+          {tracking&&!cliActive&&<><div className="stream-control-with-help"><label className="stream-overlay-toggle"><input type="checkbox" checked={colorSampling} onChange={event=>{const checked=event.target.checked;setColorSampling(checked);clearColorSample();selectTrack(null);if(checked)setTrackingViz(v=>({...v,enabled:true}));}}/>{pixelTrackingText(language,'title')}</label><ParameterHelp label={pixelTrackingText(language,'title')} help={pixelTrackingText(language,'hint')} language={language}/></div>
+          <SelectedPixelInspector video={videoRef} frames={trackingFrames} selected={colorSampling?colorSeed?.token??null:selectedTrack} active={(colorSampling||trackingViz.enabled)&&(state==='Live'||state==='Completed')} sessionKey={generation.current} timeOffset={offset.current} language={language} onSelect={colorSampling?undefined:selectTrack} colorSeed={colorSampling?colorSeed:null} colorEstimate={colorEstimate} readBboxSample={readBboxSample} onColorResample={()=>{
+            const frame=trackingFrames.current.find(f=>f.raw_detections?.some(o=>o.cache_id===colorEstimate?.cache_id));
+            const raw=frame?.raw_detections?.find(o=>o.cache_id===colorEstimate?.cache_id);
+            if(frame&&raw)void selectColorSample(raw,frame);
+          }} context={{project_id:project.id,model_id:runningModel?.model_id??modelId,source_id:source==='upload'?uploadId:cameraId}}/></>}
         </fieldset>
 
       </div>
@@ -426,7 +471,8 @@ export function StreamDemoPage({ project, language='en' }: { project: Project; l
           <button type="button" className="secondary" disabled={!busy && !cliActive} onClick={stop}><Square size={17} />{s('stop')}</button></div>
         <div className="stream-video"><video ref={videoRef} muted playsInline aria-label={s('detectionStream')} style={{ visibility: cliActive ? "hidden" : "visible" }} />
           <StreamOpticalFlowOverlay video={videoRef} settings={flowSettings} active={!cliActive&&(state==='Live'||state==='Completed')} fps={fps} sessionKey={generation.current} resetKey={flowReset} onSummary={setFlowSummary}/>
-          <StreamTrackingOverlay video={videoRef} frames={trackingFrames} selected={selectedTrack} onSelect={selectTrack} onTime={updateTime} viz={trackingViz} annotationSize={annotationSize} onStatus={setDisplayStatus} language={language} active={!cliActive && (state === "Live" || state === "Completed")} />
+          <StreamTrackingOverlay video={videoRef} frames={trackingFrames} selected={selectedTrack} onSelect={selectTrack} onTime={updateTime} viz={trackingViz} annotationSize={annotationSize} onStatus={setDisplayStatus} language={language} colorSampling={colorSampling} onPixelSelect={selectColorSample} active={!cliActive && (state === "Live" || state === "Completed")} />
+          <ColorSampleTracker video={videoRef} frames={trackingFrames} seed={colorSeed} active={colorSampling&&tracking&&!cliActive&&(state==='Live'||state==='Completed')} sessionKey={generation.current} onEstimate={setColorEstimate} language={language} annotationSize={annotationSize}/>
           {cliActive && cliFrame && <img className="stream-cli-frame" src={cliFrame} alt={s('terminalStream')} />}
           {cliActive && !cliFrame && <div className="stream-video-state"><Film size={36} /><span>{s('Terminal')}</span></div>}
           {state === "Idle" || state === "Ready" || state === "Stopped" || state === "Connecting" || state === "Failed" ? <div className="stream-video-state"><Film size={36} /><span>{s(state as StreamUiKey)}</span>{state === "Ready" && <small>{source === "upload" ? upload?.name : camera?.label}</small>}</div> : null}
@@ -449,7 +495,7 @@ export function StreamDemoPage({ project, language='en' }: { project: Project; l
             <small>{t('seekReset')}</small>
             {paused&&<p className="muted" role="status">{t(pendingSettings?'pausedPending':'pausedEditing')}</p>}
           </> : <small>{s('liveHint')}</small>}
-          {tracking && trackingViz.enabled && <div className="stream-target-actions"><span>{selectedTrack ? `${t('selected')} #${selectedTrack}` : t('selectHint')}</span><button type="button" className="secondary" disabled={!selectedTrack} onClick={() => selectTrack(null)}>{t('clear')}</button></div>}
+          {tracking && (trackingViz.enabled||colorSampling) && <div className="stream-target-actions"><span>{colorSampling?(colorSeed?`${t('selected')} #${colorSeed.token}`:pixelTrackingText(language,'hint')):selectedTrack ? `${t('selected')} #${selectedTrack}` : t('selectHint')}</span><button type="button" className="secondary" disabled={colorSampling?!colorSeed:!selectedTrack} onClick={() => {if(colorSampling)clearColorSample();else selectTrack(null);}}>{t('clear')}</button></div>}
         </div>}
         <div className="stream-monitor-bar"><span role="status">{paused&&(state==='Live'||state==='Completed')?t('pausedState'):s(state as StreamUiKey)}</span><span>{cliActive ? s('Terminal') : `${postprocess} · H.264 · ${bitrate} kbps`}</span><button type="button" className="secondary" title={s('fullscreen')} aria-label={s('fullscreen')} onClick={() => void videoRef.current?.parentElement?.requestFullscreen().catch((reason) => setError(String(reason)))}><Maximize size={16} /></button></div>
         {cliActive?<p className="stream-running-model">{t('terminalModel')}</p>:runningModel&&<p className="stream-running-model" aria-label={t('runningModel')}>{t('runningModel')}: {runningModel.format.toUpperCase()} · {runningModel.path}<br/><small>{runningModel.model_id}</small></p>}

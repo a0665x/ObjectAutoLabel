@@ -40,7 +40,9 @@ GStreamer captures cameras, and both produce aspect-preserving padded BGR frames
 Ultralytics infers with the selected engine and GStreamer encodes H.264 into
 fragmented MP4. Tracking mode draws timestamp-synchronized detections in the
 browser: confirmed IDs are interactive, while unconfirmed detections remain
-visible without a selectable ID. Detection-only mode keeps encoded OpenCV boxes. The browser uses MediaSource via a same-origin
+visible without a selectable ID. Tracking-on and detection-only playback both
+send timestamped box metadata; the Web UI draws SVG annotations over unannotated
+video. The browser uses MediaSource via a same-origin
 WebSocket. The output is video-only; audio is not forwarded. X264 bitrate is a
 target in kbps, not a guaranteed exact network rate. See
 [x264enc](https://gstreamer.freedesktop.org/documentation/x264/index.html) and
@@ -48,7 +50,8 @@ target in kbps, not a guaranteed exact network rate. See
 
 Conf/IoU changes apply to subsequent frames without restarting. Resolution,
 FPS, bitrate, model, tracking mode, and inference device are fixed for a session and become
-editable after Stop/completion. Actual inference FPS and latency are reported.
+editable after Stop/completion or Pause for uploaded files. Resume after changes
+starts a fresh session at the paused position. Actual inference FPS and latency are reported.
 FPS is the output target; inference can be slower on larger models or CPU.
 PT image size is selectable; exported models retain their export metadata dimensions.
 Only one demo session runs at a time. Stop, page exit, WebSocket disconnect,
@@ -194,6 +197,129 @@ clears all raw/motion/reference/confirmation history. Kalman dt, TTL and identit
 age use frame_index/output_fps, matching the decoded/encoded media timeline;
 inference latency and pauses do not artificially age a file's target. Camera
 timing uses the fixed-rate output timeline, not original sensor capture PTS.
+
+### Selected-box pixel appearance (2026-10-19)
+
+`Selected pixels` appears below Annotation size while object tracking is enabled
+in Web UI mode. The default inspector follows a selected confirmed box; enabling
+`Color-sample tracking` makes every observed box selectable, even without an ID.
+The panel obtains detector crops from a session-local YOLO evidence cache,
+not from the browser's current video pixels. `frameAt` chooses the displayed
+metadata frame; its original `detection_index` resolves a unique
+`session:frame_index:detection_index` key. The raw decoded BGR image and YOLO bbox
+are captured together **before ByteTrack/identity processing**. Smoothed boxes,
+predicted boxes and reused IDs cannot change the crop. All valid same-class YOLO
+detections (including those without an ID) are compared. In the default inspector,
+synthetic bridge boxes are never sampled; absent observations clear previews.
+Color-sample mode may inspect the current search/held ROI but labels it as
+appearance-only/unconfirmed and excludes it from observed-class averages.
+
+The selected cached crop establishes a fixed reference. It is not updated
+by subsequent motion, suspected identity drift, or predictions. Resample replaces
+it explicitly. Selecting another ID, turning ordinary tracking overlays off, stopping,
+seeking/restarting the session or changing model clears the reference. Pause
+retains the crop/statistics. Cache read/pin controls work while inference is
+paused; resampling requires an actual cached YOLO detection. Image-only search
+and held positions cannot replace a reference. Missing/expired crops show an
+explicit retry message; they never fall back to playback pixels.
+
+The server calculates the following descriptors on the same immutable crop.
+The browser uses the same definition for image-only search and contour previews:
+
+- Normalized color histograms: 12 hue × 3 saturation × 3 value bins, plus eight
+  neutral-value bins (116 dimensions). Very dark pixels (`V < .15`) or low
+  saturation (`S < .15`) are neutral; UI groups these as black/gray/white and
+  uses 12 hue buckets for chromatic pixels. RGB means are also exported.
+- Four-neighbor signed luminance Laplacian, using `Y=.299R+.587G+.114B` and
+  `L=left+right+up+down−4center`, with the outer one-pixel crop border excluded.
+  `abs(L) >= 20` defines an interior edge mask. Its histogram counts original
+  RGB colors at those positions, not derivative pseudocolors. The preview shows
+  those colors over black; sampled/edge-pixel counts and Laplacian variance are
+  reported. This is a local edge heuristic, not foreground/person segmentation.
+- Histogram similarity: Bhattacharyya overlap coefficient, with 80% full-color
+  and 20% edge-color evidence. If either crop lacks edge evidence, only full-color
+  overlap is used and the edge comparison is marked absent. The UI shows same-class
+  rank, per-box scores and equal-per-box average distributions; large boxes do not
+  dominate the mean merely through pixel count. Similarity is not identity
+  probability, an accuracy score or a guarantee of camera-shake robustness.
+
+See the underlying [Laplacian definition](https://docs.opencv.org/4.x/d5/db5/tutorial_laplace_operator.html)
+and [histogram comparison](https://docs.opencv.org/4.x/d8/dc8/tutorial_histogram_comparison.html).
+Lighting, occlusion, clothing similarity and background inside the box can
+confound these features. No colors are injected into ByteTrack/identity matching.
+With color tracking disabled, operators can explicitly select a confirmed
+candidate from the ranked table, using that report's metadata timestamp; detections
+without an ID remain comparison-only. Selection creates a new reference.
+
+The cache covers all detections above display confidence, across all classes.
+Crops are clipped to the YOLO input and reduced to an 80px maximum edge without
+upsampling. Crops below 3px on either resulting dimension are omitted. Per-class
+totals include omitted crops; analyzed/total counts expose the difference.
+Descriptor generation adds CPU work, not another model/GPU inference. Detector
+frames carry descriptors only; lossless RGBA crops are requested on demand.
+
+The immutable serialized ring is bounded to 32 MiB, 180 inference frames and
+8,192 entries, whichever is reached first. One explicitly pinned crop/descriptor
+is retained separately until reselection, release or session cleanup. An `RLock`
+protects inference/control access; returned snapshots cannot mutate cache entries.
+Only crops are retained, never a full-frame history. No disk/database writes occur.
+The browser retains full descriptors for at most 180 frames/2,048 recent boxes
+(the newest detector frame remains complete). Preview reads run at most four/s,
+with one inspector operation in flight; the bounded RPC queue times out after
+four seconds. Stop, disconnect, completion, seek/model change or page exit clears
+session state. Expiry cannot silently substitute a newer frame or matching ID.
+
+WebSocket `tracks` includes `raw_detections`, per-class `raw_detection_counts`,
+and cache usage. `bbox_sample {request_id,cache_id,pin}` returns an immutable
+snapshot or `error:expired`; `bbox_release` unpins it. Controls do not alter
+confidence/IoU. Keys cannot resolve outside their owning stream session.
+
+`px1-xxxxxxxx` is a non-unique quantized-descriptor checksum, never a person ID.
+Export sample JSON includes `bbox-appearance-v1`, fixed 116-D full/edge vectors,
+color buckets, RGB means, edge count/variance, sample box/time/dimensions, model/
+source context, YOLO cache key/frame/original detection index, analysis limits
+and the latest comparison scores. No raw pixels
+are exported. An additional 60-D four-quadrant color distribution supports the
+independent color tracker, described below.
+
+### Color-sample tracking (2026-10-19)
+
+The default-off checkbox is below Annotation size and requires object tracking
+to be enabled. A click pins the corresponding pre-tracker YOLO crop and freezes its
+features; a sample token is local UI provenance, never a fabricated ByteTrack ID.
+Existing detection boxes and backend identity tracking remain unchanged.
+
+The independent browser Worker considers all valid cached same-class boxes,
+including those with `id:null`, using server descriptors rather than recropping
+a potentially delayed playback frame. It also searches the displayed image,
+downsampled to a maximum 240px edge, without requiring detector boxes or fresh
+metadata. A 15-bin integral histogram ranks bounded multi-scale windows; the
+shortlist is rescored with global, four-quadrant and fine HSV histograms and
+locally refined. Position and scale are soft preferences, not an IoU/ID gate.
+The reference is never adapted automatically, preventing feedback from gradually
+replacing the original sampled colors.
+
+Detection-backed matches, image-only appearance estimates, and uncertain holds
+are distinct states. Strong matches use solid red. Weak/ambiguous evidence or
+analysis failure keeps the last bounded location as a red dashed box labeled
+Searching / unconfirmed. It does not claim the person is present there. Fully
+off-screen or occluded targets and similar clothing cannot be guaranteed to be
+reidentified by color. Search estimates are not counted as detector observations
+or included in the observed same-class mean. ByteTrack overlay switches do not
+disable an independently enabled color tracker.
+
+Tracking is bounded to four search jobs/s, one job in flight, with an eight-second
+worker timeout and stale-result suppression. Disabling the checkbox, Stop,
+session/model changes or page exit terminate work and clear the selected sample.
+Pause retains the red estimate; an explicit resample is allowed only for a current
+detector-backed estimate with a cache key. The reference/statistics JSON remains
+exportable through loss.
+
+Regression cause: cropping playback pixels with asynchronously delivered
+detector/tracker coordinates could describe background instead of original YOLO
+evidence. Tests lock a red inference crop while playback turns blue, mutate
+tracker boxes/input buffers, force eviction and select while paused. Fixed
+features must remain unchanged; expired evidence must never read video pixels.
 
 ### Independent optical-flow visualization (2026-10-15)
 

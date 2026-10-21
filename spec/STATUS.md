@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated: 2026-10-15.
+Last updated: 2026-10-19.
 
 ## Current features
 
@@ -51,10 +51,36 @@ Last updated: 2026-10-15.
   meaning and adjustment trade-offs, usable even while controls are disabled.
   Numeric fields retain typing drafts and apply valid values on Enter/blur;
   Escape restores the last value. Invalid tracking drafts block Start/Resume.
+- Selected tracked boxes expose a compact live crop, original-color Laplacian
+  edge preview, color distributions and same-class appearance ranking below
+  Annotation size. A fixed pixel sample can be resampled/exported as versioned
+  numeric features. An explicit Color-sample tracking checkbox follows same-class
+  detections without IDs or searches image pixels without detector boxes. Weak
+  evidence retains a clearly unconfirmed dashed location, not a claimed match.
+  Detection-backed sampling now uses immutable YOLO input crops/features captured
+  before ByteTrack, keyed by stream/frame/detection. All valid same-class boxes
+  are compared; one sample is pinned separately from a 32 MiB / 180-frame RAM
+  ring. Missing cache entries never recrop playback pixels. Image-only search is
+  separately labeled and cannot adapt/resample the locked reference. No disk
+  image cache or ByteTrack identity changes are introduced.
 
 ## Validation
 
-- Latest frontend regression: 378 tests passed; production build passed.
+- Latest frontend regression: 415 tests passed; production build passed.
+- YOLO cache acceptance used a real PT/video replay: paused no-ID selection,
+  lossless crop/descriptor agreement between Python and JavaScript, exact JSON
+  provenance, pinned features surviving 180-frame eviction, explicit unpinned
+  expiry, and continued image-only search after browser-local removal of all
+  box metadata. Four languages at 375/768/1440px passed without browser errors.
+  The final deployed runtime also passed isolated GPU/video inference, exact
+  crop/feature agreement and pin/release eviction checks. A concurrent project
+  stream blocked a second browser replay; that session was not interrupted.
+- Color tracking acceptance includes deterministic large-jump/no-box reacquisition,
+  no-ID detection selection and weak-evidence dashed holds. A real PT/video browser
+  replay locally removed IDs and then all box metadata: independent color tracking
+  retained a box and exercised detection, image-search and hold states. Fixed
+  features, JSON export, one-job Worker bounds, cleanup and four languages at
+  375/768/1440px passed without project writes or browser errors.
 - Deployed parameter-help acceptance verified hover, focus, tap and Escape,
   four languages and 375/768/1440px widths. Grid columns accepts clear → 1 → 16;
   invalid/out-of-range fractions retain the last valid setting, with Escape
@@ -63,7 +89,7 @@ Last updated: 2026-10-15.
   drafts blocking Resume, corrected decimal input and exact-position retuning;
   optical-flow grid edits retained one model session. No browser errors or
   project/annotation writes occurred.
-- Backend regression: all 505 tests passed in a fresh isolated Docker runtime.
+- Backend regression: all 515 tests passed in a fresh isolated Docker runtime.
 - Stream browser checks passed at 375/768/1440px: detection-first default, live
   overlay gating and screen-pixel annotation scaling. Read-only live replay
   loaded two different local PT paths with separate external model tokens and

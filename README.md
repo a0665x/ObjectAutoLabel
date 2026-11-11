@@ -26,8 +26,6 @@ Organize source images, annotations, dataset builds and model runs in a project-
 
 ![Manual annotation requires repeated box drawing; a World Model uses images and prompts to propose boxes for human review and correction.](docs/diagrams/pseudo-labeling-paper.png)
 
-Drawing every box by hand can be repetitive. With class names and prompts, a vision model proposes boxes across the source images, giving the reviewer a starting point. Predictions can miss objects or include incorrect boxes, so inspect and correct them before building a training dataset.
-
 ![Interface preview](demo_imgs/interface_preview.gif)
 
 ## Quick start

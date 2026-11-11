@@ -4,11 +4,29 @@
 
 本機優先的物件偵測資料與模型工作台：從圖片／影片、偽標註、人工校正到資料增強、切分、YOLO 訓練及模型匯出，在同一個 WebUI 完成。
 
+![概念圖對照重複手動標註與專案 Web UI 流程：影像來源與提示詞經 World Model 產生偽標註並供人工校正，再將多組資料混合、取樣及切分，用於訓練與模型版本驗證。](docs/diagrams/project-concept-unified.png)
+
+## 解決的問題
+
+1. **減少人工標註負擔**：提示詞驅動的 World Model 先為影像產生候選物件框，讓人員從檢查與修正開始，減少逐框繪製的重複工作。
+2. **讓 AI Agent 透過 API 協助操作**：Codex、Claude Code 等能存取本地環境的工具，可讀取[訓練工作流程 skill](skill/object-autolabel-training/SKILL.md)，透過 REST API 準備資料、提交任務及檢查成果；使用 REST 不需要內建 MCP server。
+3. **新增目標物件並快速迭代**：定義目標類別後，產生偽標註、組合與切分資料、訓練新模型版本，再透過專案工作流程驗證。偽標註和模型表現仍需檢查，不能保證正確。
+
 ## 專案目的
 
 - **快速偽標註與 YOLO 訓練**：使用提示詞驅動的視覺世界模型（YOLO-World／YOLOE）快速產生物件框與偽標籤，再訓練 YOLO11、YOLO26 等相容的 YOLO 架構。
 - **本地化、可由 API 驅動的迭代平台**：標註與訓練留在自己的主機，本地 AI Agent 可透過 REST API 產生標註、建立 Split、提交訓練與讀取結果。目前尚未內建 MCP server。
 - **生成式資料快速建立專用模型**：將 ComfyUI 產出的圖片，或 [MiniMax H3 影片](https://comfy.org/minimax-h3/)抽幀後匯入，直接進行偽標註與指定物件的 YOLO 訓練，不必先搭建模擬器或額外的 sim2real 轉換流程；真實場景表現仍須驗證。
+
+## 專案流程概覽
+
+以專案為中心的 Web UI 管理來源影像、標註、資料集版本及模型訓練紀錄。提示詞驅動的 World Model 先產生候選標註供人員檢查；多組偽標註資料與選用的類別映射 Open Data 可以再混合、取樣及切分，用於模型訓練。驗證模型版本後，可依結果調整下一輪資料。此圖為概念示意；目前實作請參考[詳細操作流程](#操作流程)。
+
+## 偽標註解決什麼問題？
+
+![手動標註需要反覆畫框；World Model 利用影像與提示詞產生候選框，供人員檢查及修正。](docs/diagrams/pseudo-labeling-paper.png)
+
+逐張繪製物件框需要重複操作。輸入類別與提示詞後，視覺模型會對來源影像提出候選框，讓標註人員有可供修改的起點。模型仍可能漏掉物件或產生錯誤框，建立訓練資料集前需要檢查與修正。
 
 ![操作介面預覽](demo_imgs/interface_preview.gif)
 
@@ -86,6 +104,12 @@ scripts/install-input-model.sh yolo26n.pt
 [互動式 API 文件](http://127.0.0.1:8501/docs) · [OpenAPI 規格](http://127.0.0.1:8501/openapi.json) · [端點說明](spec/API.md)
 
 長時間任務會回傳 job ID，可用 `GET /api/jobs/{job_id}` 查詢狀態與結果。本地 Agent 可據此串接「產生標註 → 訓練 → 評估」迭代；MCP 需另行實作轉接層。目前 ComfyUI 的串接方式是匯入生成檔案，並非內建生成節點。
+
+專案提供[訓練工作流程 skill](skill/object-autolabel-training/SKILL.md)，包含啟動、API 操作、類別確認與成果回報。使用具備終端機及本地 API 存取能力的 agent 開啟此專案後，可以直接輸入：
+
+> 請閱讀 `skill/object-autolabel-training/SKILL.md` 與專案文件，使用 ObjectAutoLabel 訓練 `data/input/my-images` 資料夾中的物件偵測模型；若目標物件或標籤 schema 不明確，先與我確認類別，再產生並檢查偽標註、建立資料切分、訓練模型，最後回報實際模型路徑與驗證結果。
+
+請將資料夾換成自己的路徑。Agent 可以直接讀取該檔案；是否自動發現 skill 取決於工具及其設定。目前訓練支援相容的 YOLO 權重，尚非任意模型架構。
 
 ## Review 快捷鍵
 

@@ -4,11 +4,29 @@ English · [繁體中文](README.zh.md)
 
 A local-first workspace for object-detection datasets and models. Prepare images or video, generate pseudo labels, review boxes, augment and split data, train YOLO models, and export results in one WebUI.
 
+![Conceptual overview contrasting repetitive manual labeling with a project Web UI: sources and prompts feed a World Model for pseudo labeling and review; multiple data groups are mixed, sampled and split for training and model-version evaluation.](docs/diagrams/project-concept-unified.png)
+
+## What problems does it solve?
+
+1. **Reduce manual labeling work.** A prompt-driven World Model proposes bounding boxes across images, giving people a starting point for review and correction instead of drawing every box from scratch.
+2. **Automate through an API and AI coding agents.** Codex, Claude Code and other agents with access to the local environment can read the [training skill](skill/object-autolabel-training/SKILL.md) and call the REST API to prepare data, submit jobs and inspect outputs. No built-in MCP server is required for REST access.
+3. **Iterate when new objects are needed.** Define the target classes, create pseudo labels, combine and split data, train a new model version, then validate it in the project workflow. Review remains important: generated labels and model performance are not guaranteed.
+
 ## Purpose
 
 - **Fast pseudo labeling and YOLO training.** Use prompt-driven vision models (YOLO-World / YOLOE) to generate bounding-box labels, then train compatible YOLO architectures such as YOLO11 and YOLO26.
 - **Local-first, API-driven iteration.** Keep labeling and training on your own machine. Local AI agents can call the REST API to generate labels, build splits, submit training jobs, and inspect results. A built-in MCP server is not currently included.
 - **Generated data to task-specific detectors.** Import images from ComfyUI or frames from [MiniMax H3 videos](https://comfy.org/minimax-h3/) into the same labeling and training pipeline. This workflow requires no simulator or separate sim2real conversion step; real-world performance still needs validation.
+
+## Project workflow at a glance
+
+Organize source images, annotations, dataset builds and model runs in a project-centered Web UI. A prompt-driven World Model proposes labels for review; multiple pseudo-labeled groups and optional mapped Open Data can then be combined, sampled and split for training. Validate model versions and use the results to guide the next iteration. The illustration is conceptual; see the [detailed workflow](#workflow) for the current implementation.
+
+## Why pseudo labeling?
+
+![Manual annotation requires repeated box drawing; a World Model uses images and prompts to propose boxes for human review and correction.](docs/diagrams/pseudo-labeling-paper.png)
+
+Drawing every box by hand can be repetitive. With class names and prompts, a vision model proposes boxes across the source images, giving the reviewer a starting point. Predictions can miss objects or include incorrect boxes, so inspect and correct them before building a training dataset.
 
 ![Interface preview](demo_imgs/interface_preview.gif)
 
@@ -86,6 +104,12 @@ Installers verify SHA-256 checksums. Model folders are bind-mounted: refresh the
 [Interactive API docs](http://127.0.0.1:8501/docs) · [OpenAPI schema](http://127.0.0.1:8501/openapi.json) · [Endpoint reference](spec/API.md)
 
 Long-running requests return a job ID; poll `GET /api/jobs/{job_id}` for status and results. Agents can use these endpoints for a generate → train → evaluate loop. MCP access requires a separately implemented adapter around this REST API; ComfyUI integration currently means importing generated files, not an embedded generation node.
+
+The repository's [agent training skill](skill/object-autolabel-training/SKILL.md) covers startup, API calls, schema confirmation and artifact reporting. Open the repository in an agent with terminal and local API access and provide a request such as:
+
+> Read `skill/object-autolabel-training/SKILL.md` and the project documentation, then use ObjectAutoLabel to train a detector from `data/input/my-images`; confirm the target classes and label schema with me if unclear, generate and inspect pseudo labels, build a split, train a model, and report the actual model path and validation results.
+
+Replace the folder with your own. The skill can be read directly; automatic skill discovery depends on the agent and its configuration. Current training supports compatible YOLO checkpoints, rather than arbitrary model architectures.
 
 ## Review shortcuts
 

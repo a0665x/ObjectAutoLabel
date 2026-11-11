@@ -22,10 +22,6 @@ A local-first workspace for object-detection datasets and models. Prepare images
 
 Organize source images, annotations, dataset builds and model runs in a project-centered Web UI. A prompt-driven World Model proposes labels for review; multiple pseudo-labeled groups and optional mapped Open Data can then be combined, sampled and split for training. Validate model versions and use the results to guide the next iteration. The illustration is conceptual; see the [detailed workflow](#workflow) for the current implementation.
 
-## Why pseudo labeling?
-
-![Manual annotation requires repeated box drawing; a World Model uses images and prompts to propose boxes for human review and correction.](docs/diagrams/pseudo-labeling-paper.png)
-
 ![Interface preview](demo_imgs/interface_preview.gif)
 
 ## Quick start
